@@ -13,14 +13,14 @@
 var SPREADSHEET_ID = '1C2NX5ImumLfOxyopBHr_xOvwSOQod7bf8yzRTJHX_Yo';
 var CLIENT_SHEET_NAME = 'Client Database';
 var SUMMARY_SHEET_NAME = 'Generated Summary';
-var ERRORS_SHEET_NAME = 'Report Errors';
+var ERRORS_SHEET_NAME = 'Errors';
 var REPORT_SHEET_PREFIX = 'Generated Report - ';
 var UNKNOWN_GROUP_LABEL = 'Unknown';
 var PROTECTION_DESCRIPTION = 'LedgerX: locked report columns (auto-managed)';
 var SUMMARY_PROTECTED_COLUMNS = { start: 1, end: 6 }; // A:F
 
 var REPORT_HEADERS_ = ['STT ID', 'Name', 'System', 'AM', 'Note'];
-var ERROR_HEADERS_ = ['STT ID', 'Issue', 'Details'];
+var ERROR_HEADERS_ = ['Client Name', 'Account Number', 'Software', 'Error Type', 'Detailed Error Message', 'Timestamp'];
 
 /** Returns the single existing spreadsheet. Never call SpreadsheetApp.create(). */
 function getSpreadsheet_() {
@@ -130,19 +130,24 @@ function writeReportRows_(sheet, rows) {
   sheet.getRange(2, 1, rows.length, REPORT_HEADERS_.length).setValues(rows);
 }
 
-/** Returns (creating if needed) the Report Errors sheet with its header. */
+/** Returns (creating if needed) the Errors sheet with its header. */
 function getOrCreateErrorsSheet_(spreadsheet) {
   var sheet = spreadsheet.getSheetByName(ERRORS_SHEET_NAME);
   if (!sheet) {
     sheet = spreadsheet.insertSheet(ERRORS_SHEET_NAME);
-    sheet.getRange(1, 1, 1, ERROR_HEADERS_.length).setValues([ERROR_HEADERS_]);
     sheet.setFrozenRows(1);
   }
   return sheet;
 }
 
-/** Batch-writes error rows starting at row 2. rows = [[sttId,issue,details], ...] */
+/**
+ * Clears the Errors sheet, rewrites its header row (idempotent, so a
+ * pre-existing sheet with stale headers is corrected), then batch-writes
+ * the new error rows. rows = [[clientName, account, software, errorType,
+ * message, timestamp], ...]
+ */
 function writeErrorRows_(sheet, rows) {
+  sheet.getRange(1, 1, 1, ERROR_HEADERS_.length).setValues([ERROR_HEADERS_]);
   clearDataRows_(sheet);
   if (rows.length === 0) return;
   sheet.getRange(2, 1, rows.length, ERROR_HEADERS_.length).setValues(rows);
@@ -185,6 +190,23 @@ function protectSummaryColumns_(spreadsheet) {
  */
 function refreshCalculations_(spreadsheet) {
   SpreadsheetApp.flush();
+}
+
+/**
+ * Standalone refresh action for the UI's "Refresh Monthly Performance
+ * File" step: applies all pending writes so pivot tables, formulas, and
+ * chart references recalculate against the latest data, and returns the
+ * refresh timestamp in the spreadsheet's time zone.
+ */
+function refreshWorkbook_() {
+  var spreadsheet = getSpreadsheet_();
+  refreshCalculations_(spreadsheet);
+  var tz = spreadsheet.getSpreadsheetTimeZone();
+  var now = new Date();
+  return {
+    refreshedDate: Utilities.formatDate(now, tz, 'yyyy-MM-dd'),
+    refreshedTime: Utilities.formatDate(now, tz, 'HH:mm:ss')
+  };
 }
 
 /**

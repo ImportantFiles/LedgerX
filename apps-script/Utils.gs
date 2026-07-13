@@ -147,3 +147,15 @@ function monthKeyToLabel_(monthKey) {
   var monthIndex = parseInt(parts[1], 10) - 1;
   return MONTH_NAMES_[monthIndex] + ' ' + year;
 }
+
+/**
+ * Extracts just the month name from a "YYYY-MM" key, e.g. "2026-07" ->
+ * "July". Returns '' when the key is missing or malformed, so callers
+ * can fall back to another label.
+ */
+function monthNameFromKey_(monthKey) {
+  if (isBlank_(monthKey)) return '';
+  var parts = String(monthKey).split('-');
+  var idx = parseInt(parts[1], 10) - 1;
+  return (idx >= 0 && idx < 12) ? MONTH_NAMES_[idx] : '';
+}

@@ -1,55 +1,67 @@
 # LedgerX
 
-LedgerX turns a manually copied STT (trading account) table into per-account-manager
-client reports, written directly into your existing Google Spreadsheet. It runs as a
-static site on GitHub Pages, backed by a Google Apps Script Web App.
+LedgerX turns a Monthly Performance (STT) export into per-account-manager client
+reports, written directly into your existing Google Spreadsheet. It runs as a static
+site on GitHub Pages, backed by a Google Apps Script Web App.
 
-Built for one administrator to run once per reporting period. Paste the STT table,
-pick the reporting month, click **Generate Reports** - matching against the Client
-Database, growth/P&L calculations, report grouping, error logging, sheet protection,
-and the Last Updated stamp all happen automatically.
+The interface is a guided, one-step-at-a-time flow - like talking to an operator
+that performs one task at a time - rather than a dashboard. Pure black theme,
+silver accents, minimal typography, subtle fade/typing animations.
+
+## The flow
+
+```
+Upload File  ->  Refresh Workbook  ->  Select Reporting Month  ->  Generate Report
+                                                                        |
+        Prepare Next Month  <-  View Results (Successful / Errors)  <---+
+```
+
+Only the current step is visible; each completed step transitions into the next
+automatically. An activity log at the bottom of the page tracks the last upload,
+refresh, generation, and archive.
 
 ## How it works
 
 ```
-GitHub Pages (static)              Google Apps Script (Web App)         Google Sheet
+GitHub Pages (static)              Google Apps Script (Web App)         Google Drive
 ------------------------           ---------------------------          ------------------
-index.html / styles.css / -- fetch(JSON, text/plain) -->  Code.gs (doGet/doPost)  ---> Client Database
-script.js                                                  Reports.gs, Sheets.gs,       Generated Report - {AM}
-                                                            Archive.gs, Utils.gs         Report Errors
-                        <-- JSON response ------------------                             Generated Summary
-                                                                                          Archive - {Month} - *
+index.html / styles.css / -- fetch(JSON, text/plain) -->  Code.gs (doGet/doPost)  ---> The workbook:
+script.js                                                  Reports.gs, Sheets.gs,        Client Database
+                                                            Archive.gs, Utils.gs          Generated Report - {AM}
+                        <-- JSON response ------------------                              Errors
+                                                                                           Generated Summary
+                                                                                          Archive copies:
+                                                                                           Monthly Performance - {Month} {Year}
 ```
 
-- **One spreadsheet only.** Every sheet the app reads or writes - Client Database,
-  Generated Report - *, Report Errors, Generated Summary, and Archive - * tabs - lives
-  inside the single existing workbook. Nothing here ever calls
-  `SpreadsheetApp.create()`.
+- **Workbook.** All live sheets - Client Database, Generated Report - *, Errors,
+  Generated Summary - are tabs in the one existing spreadsheet. Archives are full
+  workbook copies saved into the same Drive folder, one per month, never modified
+  after creation.
 - **Authentication.** The frontend is public (GitHub Pages), so requests are
-  authenticated with a shared secret key rather than Google login. The key lives in
-  Apps Script Script Properties (`API_SECRET_KEY`) and is entered once into the
-  browser's Settings dialog, where it's kept in `localStorage`.
-- **Backend is the source of truth.** The browser mirrors the calculation rules for
-  instant preview, but every "Generate Reports" click also sends the raw pasted rows
-  to Apps Script, which re-reads the Client Database fresh and recalculates
-  everything before writing - so a stale browser cache can never corrupt the sheet.
+  authenticated with a shared secret key. The key lives in Apps Script Script
+  Properties (`API_SECRET_KEY`) and is entered once into the browser (stored in
+  `localStorage`).
+- **Backend is the source of truth.** The browser only parses the uploaded table
+  into rows; the Apps Script backend re-reads the Client Database fresh and performs
+  every match, calculation, and write.
 
 ## Project structure
 
 ```
 TradingReportGenerator/
-  index.html            Dashboard UI
-  styles.css             Dark glassmorphism theme
-  script.js               Frontend logic (API client, calc engine, rendering)
-  config.js               Public config: Apps Script URL, column aliases, etc.
-  assets/                  Favicon / logo
+  index.html            Guided step-by-step UI
+  styles.css             Pure black / silver minimal theme
+  script.js               Step flow, file parsing, typing-effect status, API client
+  config.js               Public config: Apps Script URL, spreadsheet URL, column aliases
+  assets/                  Favicon
   apps-script/
     Code.gs                Web app entry points (doGet/doPost), routing, auth
-    Reports.gs              Validation, calculations, grouping, report writing
-    Sheets.gs                All Sheets read/write access + protection
-    Archive.gs               "Prepare Next Month" archiving
+    Reports.gs              Validation, calculations, grouping, report + error writing
+    Sheets.gs                All Sheets read/write access, refresh, column protection
+    Archive.gs               "Prepare Next Month": Drive workbook copy + data clear
     Utils.gs                 Formatting/parsing helpers shared by the above
-    appsscript.json           Apps Script manifest (web app config)
+    appsscript.json           Apps Script manifest (web app config, OAuth scopes)
   README.md
   SETUP.md                 Full one-time setup guide
 ```
@@ -60,20 +72,36 @@ TradingReportGenerator/
    Script Web App, and set the shared secret key.
 2. Put the exec URL from your deployment into `config.js` (`APPS_SCRIPT_URL`).
 3. Push this folder to a GitHub repo and enable GitHub Pages on it.
-4. Open the site, click the gear icon, paste in the access key, and you're ready to
-   generate reports.
+4. Open the site and enter the access key when prompted.
 
 ## Data rules (for reference)
 
 - **Net Deposit** = Total Deposit − Total Withdrawal
 - **Growth %** = ((Balance − Net Deposit) / Net Deposit) × 100, rounded to 2 decimals
 - **Floating P/L** = Equity − Balance
-- STT's own "Growth" column is always ignored - growth is recalculated from Balance
-  and Net Deposit every time.
+- The source's own "Growth" column is always ignored - growth is recalculated from
+  Balance and Net Deposit every time.
 - Negative numbers always render as `-$1,250.55`, never `($1,250.55)`.
-- An account is routed to **Generated Report - Unknown** and logged in
-  **Report Errors** whenever its STT ID is blank/unmatched, or its Balance, Deposit,
-  or Equity is blank, non-numeric, or (for Balance) zero.
+- **Notes** are always one single sentence, ready to paste into GHL:
+  `July: 6.42% growth, $1,842.55 closed profit, $325.20 floating P/L, $18,560.55 current balance.`
+- An account is routed to **Generated Report - Unknown** and logged in the
+  **Errors** sheet whenever its STT ID is blank/unmatched/duplicated, or its
+  Balance, Deposit, or Equity is blank, non-numeric, or (for Balance) zero.
+- The **Errors** sheet stores every error from the latest generation:
+  Client Name, Account Number, Software, Error Type, Detailed Error Message, Timestamp.
+- The Google Sheet's own pivot tables are the official summary - LedgerX refreshes
+  them (by flushing the new report data they reference) but never generates a
+  separate summary.
+- Disclaimer shown in the app: *Performance shown is Month-to-Date and should not
+  be interpreted as Month-on-Month performance.*
+
+## Prepare Next Month
+
+Archiving saves a complete copy of the workbook - formulas, pivot tables, charts,
+formatting - as `Monthly Performance - {Month} {Year}` in the same Drive folder,
+then clears only the report data rows. Headers, formulas, pivot tables, conditional
+formatting, protected ranges, data validation, and sheet structure are preserved, so
+the workbook is immediately ready for the next month.
 
 ## License
 

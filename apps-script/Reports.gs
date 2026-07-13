@@ -38,8 +38,14 @@ function evaluateSttRow_(row, clientDb, seenIds, monthLabel) {
   }
 
   if (seenIds[sttId]) {
-    issues.push({ issue: ISSUES_.DUPLICATE_STT_ID, details: 'STT ID "' + sttId + '" appears more than once in the pasted data.' });
-    return { sttId: sttId, isDuplicate: true, issues: issues };
+    issues.push({ issue: ISSUES_.DUPLICATE_STT_ID, details: 'STT ID "' + sttId + '" appears more than once in the imported data.' });
+    var dupClient = clientDb.bySttId[sttId];
+    return {
+      sttId: sttId,
+      name: dupClient ? dupClient.name : 'Unknown',
+      system: dupClient ? dupClient.system : 'Unknown',
+      isDuplicate: true, issues: issues
+    };
   }
   seenIds[sttId] = true;
 
@@ -138,34 +144,38 @@ function buildUnknownNote_(monthLabel, issues) {
 
 /**
  * Main entry point for report generation. Reads the Client Database
- * fresh (never trusts client-cached data), classifies every pasted STT
- * row, writes report sheets grouped by AM, writes Report Errors, updates
- * Client Database notes, refreshes calculations, protects the Generated
- * Summary sheet, and stamps Last Updated.
+ * fresh (never trusts client-cached data), classifies every imported STT
+ * row, writes report sheets grouped by AM, writes the Errors sheet,
+ * updates Client Database notes, refreshes calculations, protects the
+ * Generated Summary sheet, and stamps Last Updated. Notes use the month
+ * name alone (e.g. "July: ...") while the Last Updated stamp uses the
+ * full "{Month} {Year}" label.
  */
 function generateReports_(payload) {
   if (!payload || !Array.isArray(payload.rows) || payload.rows.length === 0) {
     throw new Error('No STT rows were provided.');
   }
   var monthLabel = payload.monthLabel || monthKeyToLabel_(payload.monthKey);
+  var noteMonth = monthNameFromKey_(payload.monthKey) || monthLabel;
   var spreadsheet = getSpreadsheet_();
   var clientDb = readClientDatabase_(spreadsheet);
+  var timestamp = Utilities.formatDate(new Date(), spreadsheet.getSpreadsheetTimeZone(), 'yyyy-MM-dd HH:mm:ss');
 
   var seenIds = {};
   var groups = {}; // amLabel -> [ [sttId,name,system,am,note], ... ]
-  var errorRows = []; // [ [sttId, issue, details], ... ]
+  var errorRows = []; // [ [clientName, account, software, errorType, message, timestamp], ... ]
   var noteUpdates = {};
 
   var counts = { total: 0, matched: 0, unknown: 0, zeroBalance: 0, errors: 0 };
 
   payload.rows.forEach(function (row) {
     counts.total++;
-    var result = evaluateSttRow_(row, clientDb, seenIds, monthLabel);
+    var result = evaluateSttRow_(row, clientDb, seenIds, noteMonth);
 
     if (result.isDuplicate) {
       counts.errors += result.issues.length;
       result.issues.forEach(function (i) {
-        errorRows.push([result.sttId, i.issue, i.details]);
+        errorRows.push([result.name, result.sttId, result.system, i.issue, i.details, timestamp]);
       });
       return;
     }
@@ -173,7 +183,7 @@ function generateReports_(payload) {
     if (result.issues && result.issues.length > 0) {
       counts.errors += result.issues.length;
       result.issues.forEach(function (i) {
-        errorRows.push([result.sttId || '(blank)', i.issue, i.details]);
+        errorRows.push([result.name || 'Unknown', result.sttId || '(blank)', result.system || 'Unknown', i.issue, i.details, timestamp]);
         if (i.issue === ISSUES_.ZERO_BALANCE) counts.zeroBalance++;
       });
     }
@@ -226,7 +236,10 @@ function generateReports_(payload) {
       errorCount: errorRows.length
     },
     groups: Object.keys(groups),
-    errors: errorRows.map(function (r) { return { sttId: r[0], issue: r[1], details: r[2] }; }),
+    errors: errorRows.map(function (r) {
+      return { clientName: r[0], sttId: r[1], software: r[2], issue: r[3], details: r[4], timestamp: r[5] };
+    }),
+    notes: Object.keys(noteUpdates).map(function (id) { return { sttId: id, note: noteUpdates[id] }; }),
     warnings: skippedNamedRanges.length
       ? ['Named range(s) not found, Last Updated not fully stamped: ' + skippedNamedRanges.join(', ')]
       : []

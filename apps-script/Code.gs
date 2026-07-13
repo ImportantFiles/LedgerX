@@ -38,6 +38,8 @@ function doPost(e) {
     assertAuthorized_(body.key);
 
     switch (body.action) {
+      case 'refreshWorkbook':
+        return refreshWorkbook_();
       case 'generateReports':
         return generateReports_(body);
       case 'prepareNextMonth':
