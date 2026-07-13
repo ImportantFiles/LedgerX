@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LedgerX &mdash; Trading Report Generator</title>
+<link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div class="app-shell">
+
+  <!-- ===================== Sticky Toolbar ===================== -->
+  <header class="topbar">
+    <div class="brand">
+      <img src="assets/favicon.svg" alt="" class="brand-mark">
+      <span class="brand-name">LedgerX</span>
+    </div>
+
+    <div class="toolbar-actions">
+      <label class="field-inline">
+        <span class="field-label">Reporting Month</span>
+        <select id="monthSelect" aria-label="Select Reporting Month"></select>
+      </label>
+
+      <button id="btnPasteData" class="btn btn-ghost" type="button">Paste Data</button>
+      <button id="btnGenerate" class="btn btn-primary" type="button" disabled>Generate Reports</button>
+      <button id="btnViewErrors" class="btn btn-ghost" type="button">View Errors <span id="errorBadge" class="badge hidden">0</span></button>
+      <button id="btnCopyNotes" class="btn btn-ghost" type="button">Copy Notes</button>
+      <button id="btnExport" class="btn btn-ghost" type="button">Export Reports</button>
+      <button id="btnSync" class="btn btn-ghost" type="button">Sync to Google Sheets</button>
+      <button id="btnPrepareNext" class="btn btn-danger-ghost" type="button">Prepare Next Month</button>
+      <button id="btnSettings" class="btn btn-icon" type="button" title="Connection settings" aria-label="Connection settings">&#9881;</button>
+    </div>
+  </header>
+
+  <main class="main">
+
+    <!-- ===================== Warning Card ===================== -->
+    <section class="warning-card" role="note">
+      <div class="warning-icon">&#9888;</div>
+      <div class="warning-body">
+        <h2>IMPORTANT</h2>
+        <p>All imported STT data is cumulative running data from the account Start Date through the selected
+          reporting month. All generated reports represent overall account performance from inception through the
+          selected month and are <strong>NOT</strong> month-over-month values.</p>
+      </div>
+    </section>
+
+    <!-- ===================== Dashboard Cards ===================== -->
+    <section class="cards-grid" aria-label="Summary">
+      <div class="stat-card">
+        <span class="stat-label">Total Accounts</span>
+        <span class="stat-value" id="statTotal">0</span>
+      </div>
+      <div class="stat-card stat-good">
+        <span class="stat-label">Matched Accounts</span>
+        <span class="stat-value" id="statMatched">0</span>
+      </div>
+      <div class="stat-card stat-warn">
+        <span class="stat-label">Unknown Accounts</span>
+        <span class="stat-value" id="statUnknown">0</span>
+      </div>
+      <div class="stat-card stat-warn">
+        <span class="stat-label">Zero Balance Accounts</span>
+        <span class="stat-value" id="statZeroBalance">0</span>
+      </div>
+      <div class="stat-card stat-good">
+        <span class="stat-label">Generated Reports</span>
+        <span class="stat-value" id="statReports">0</span>
+      </div>
+      <div class="stat-card stat-bad">
+        <span class="stat-label">Error Count</span>
+        <span class="stat-value" id="statErrors">0</span>
+      </div>
+    </section>
+
+    <!-- ===================== Paste Panel ===================== -->
+    <section id="pastePanel" class="glass-panel paste-panel hidden">
+      <div class="panel-header">
+        <h3>Paste STT Table</h3>
+        <button class="btn btn-icon" id="btnClosePaste" aria-label="Close">&times;</button>
+      </div>
+      <p class="panel-hint">Copy the complete STT table (including its header row) and paste it below. Extra
+        columns are ignored automatically.</p>
+      <textarea id="sttInput" class="paste-textarea" placeholder="Paste the STT table here (Ctrl+V)..." spellcheck="false"></textarea>
+      <div class="panel-footer">
+        <span id="pasteRowCount" class="muted">0 rows detected</span>
+        <button id="btnParse" class="btn btn-primary" type="button">Parse Data</button>
+      </div>
+    </section>
+
+    <!-- ===================== Search + Results ===================== -->
+    <section class="glass-panel workspace">
+      <div class="workspace-toolbar">
+        <input id="searchInput" class="search-input" type="search"
+               placeholder="Search by STT ID, Name, System, or AM...">
+        <div class="am-tabs" id="amTabs" role="tablist" aria-label="Filter by AM"></div>
+      </div>
+
+      <div class="table-scroll">
+        <table class="report-table">
+          <thead>
+            <tr>
+              <th>STT ID</th>
+              <th>Name</th>
+              <th>System</th>
+              <th>AM</th>
+              <th>Note</th>
+            </tr>
+          </thead>
+          <tbody id="reportTableBody">
+            <tr class="empty-row"><td colspan="5">No reports generated yet. Paste STT data and click Generate Reports.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <p class="footer-note">Last generation: <span id="lastGeneratedLabel">never</span></p>
+  </main>
+</div>
+
+<!-- ===================== Errors Modal ===================== -->
+<dialog id="errorsModal" class="modal">
+  <div class="modal-header">
+    <h3>Report Errors</h3>
+    <button class="btn btn-icon" data-close-modal="errorsModal" aria-label="Close">&times;</button>
+  </div>
+  <div class="modal-body">
+    <div class="table-scroll modal-table-scroll">
+      <table class="report-table">
+        <thead><tr><th>STT ID</th><th>Issue</th><th>Details</th></tr></thead>
+        <tbody id="errorsTableBody">
+          <tr class="empty-row"><td colspan="3">No errors.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</dialog>
+
+<!-- ===================== Settings Modal ===================== -->
+<dialog id="settingsModal" class="modal">
+  <div class="modal-header">
+    <h3>Connection Settings</h3>
+    <button class="btn btn-icon" data-close-modal="settingsModal" aria-label="Close">&times;</button>
+  </div>
+  <div class="modal-body">
+    <label class="field-block">
+      <span class="field-label">Apps Script Access Key</span>
+      <input id="accessKeyInput" type="password" class="text-input" autocomplete="off"
+             placeholder="Paste the shared secret key">
+    </label>
+    <p class="panel-hint">Stored only in this browser (localStorage). Ask your Apps Script administrator for the
+      key configured in Script Properties as <code>API_SECRET_KEY</code>.</p>
+    <div class="modal-actions">
+      <button id="btnTestConnection" class="btn btn-ghost" type="button">Test Connection</button>
+      <button id="btnSaveSettings" class="btn btn-primary" type="button">Save</button>
+    </div>
+    <p id="settingsStatus" class="status-line"></p>
+  </div>
+</dialog>
+
+<!-- ===================== Prepare Next Month Confirm ===================== -->
+<dialog id="confirmArchiveModal" class="modal">
+  <div class="modal-header">
+    <h3>Prepare Next Month</h3>
+    <button class="btn btn-icon" data-close-modal="confirmArchiveModal" aria-label="Close">&times;</button>
+  </div>
+  <div class="modal-body">
+    <p>This will archive the current month's reports, clear the generated report data while preserving workbook
+      formatting and formulas, and prepare the system for the next reporting month.</p>
+    <p class="text-danger"><strong>This action cannot be undone.</strong></p>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" data-close-modal="confirmArchiveModal" type="button">Cancel</button>
+      <button id="btnConfirmArchive" class="btn btn-danger" type="button">Continue</button>
+    </div>
+  </div>
+</dialog>
+
+<!-- ===================== Loading Overlay ===================== -->
+<div id="loadingOverlay" class="loading-overlay hidden">
+  <div class="loading-box">
+    <div class="spinner"></div>
+    <p id="loadingLabel">Working...</p>
+    <div class="progress-track"><div id="progressFill" class="progress-fill"></div></div>
+  </div>
+</div>
+
+<!-- ===================== Toasts ===================== -->
+<div id="toastContainer" class="toast-container" aria-live="polite"></div>
+
+<script src="config.js"></script>
+<script src="script.js"></script>
+</body>
+</html>
