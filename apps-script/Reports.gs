@@ -26,7 +26,9 @@ var ISSUES_ = {
  * bad data - bad data is reported via `issues`, not exceptions.
  */
 function evaluateSttRow_(row, clientDb, seenIds, monthLabel) {
-  var sttId = normalizeSttId_(row.sttId);
+  // row.sttId carries the raw STT report Account cell, which may be a
+  // label with the ID in parentheses ("_RS15 500K Tradiso (1335619)").
+  var sttId = extractSttId_(row.sttId);
   var issues = []; // [{ issue, details }]
 
   if (isBlank_(sttId)) {

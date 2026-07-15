@@ -1,12 +1,14 @@
 /**
  * script.js
- * LedgerX frontend - a guided, one-step-at-a-time flow:
+ * LedgerX frontend — a conversational, one-question-at-a-time interface.
  *
- *   Upload File -> Refresh Workbook -> Select Period -> Generate -> Results -> Prepare Next Month
- *
- * All business logic (matching, calculations, note text, error rules)
- * lives in the Apps Script backend; this file only parses the uploaded
- * table into rows, drives the step transitions, and renders results.
+ * PRESENTATION LAYER ONLY. The business layer is byte-for-byte the same
+ * as before: Api (endpoints, payload shapes, text/plain CORS posts),
+ * TableData (file/paste parsing), Store (localStorage), and the backend
+ * workflow order — parse upload -> refreshWorkbook -> generateReports ->
+ * prepareNextMonth. Only how steps are presented and advanced changed:
+ * questions replace forms, and steps that used to need a button click
+ * (refresh, generate) run automatically inside the processing scene.
  */
 (function () {
   'use strict';
@@ -17,6 +19,9 @@
   function delay(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
   function now() { return new Date().toLocaleString(); }
 
+  var REDUCED_MOTION = !!(window.matchMedia &&
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+
   function escapeHtml(str) {
     return String(str == null ? '' : str).replace(/[&<>"']/g, function (c) {
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
@@ -24,7 +29,9 @@
   }
 
   // =======================================================================
-  // Persistence: access key + activity log (localStorage only)
+  // Persistence: access key + activity log (localStorage only). Unchanged.
+  // The activity log is still recorded; it just has no on-page display in
+  // the conversational UI, so render() is null-safe.
   // =======================================================================
   var Store = {
     getKey: function () { return localStorage.getItem(CFG.STORAGE_KEYS.ACCESS_KEY) || ''; },
@@ -40,10 +47,28 @@
     }
   };
 
+  var ActivityLog = {
+    render: function () {
+      var a = Store.getActivity();
+      var fields = {
+        actUpload: a.lastUpload || '—',
+        actRefresh: a.lastRefresh || '—',
+        actGenerate: a.lastGenerate || '—',
+        actArchive: a.lastArchive || '—',
+        actStatus: a.status || 'Idle',
+        actErrors: a.lastErrors != null ? String(a.lastErrors) : '—'
+      };
+      Object.keys(fields).forEach(function (id) {
+        var el = $(id);
+        if (el) el.textContent = fields[id];
+      });
+    }
+  };
+
   // =======================================================================
   // API client. POST bodies are sent as text/plain (containing JSON) to
   // stay inside the CORS "simple request" rules - Apps Script web apps
-  // cannot answer a CORS preflight (OPTIONS) request.
+  // cannot answer a CORS preflight (OPTIONS) request. Unchanged.
   // =======================================================================
   var Api = {
     get: function (action) {
@@ -71,6 +96,7 @@
   // =======================================================================
   // Table parsing: uploaded file or pasted text -> structured STT rows.
   // Extra columns in the source are ignored; only aliased columns are read.
+  // Unchanged.
   // =======================================================================
   var TableData = {
     detectColumns: function (headerCells) {
@@ -140,100 +166,203 @@
   };
 
   // =======================================================================
-  // Status player: types each message line, holds with a pulsing ellipsis
-  // on the last line until the real work settles, then types the final
-  // line ("Done." by default) - or the error message if the work failed.
+  // Liquidity waveform. Thin layered lines (blue / purple / teal / white)
+  // drifting slowly through a center envelope — market flow, not Siri.
+  // Rendered only while visible; a single static frame under reduced motion.
   // =======================================================================
-  var TYPE_SPEED = 14;
-  var LINE_PAUSE = 240;
+  var TAU = Math.PI * 2;
 
-  function typeLine(container, text, className) {
-    return new Promise(function (resolve) {
-      var line = document.createElement('div');
-      line.className = 'status-line' + (className ? ' ' + className : '');
-      container.appendChild(line);
-      var i = 0;
-      (function tick() {
-        i++;
-        line.textContent = text.slice(0, i);
-        if (i < text.length) {
-          setTimeout(tick, TYPE_SPEED);
-        } else {
-          line.classList.add('done');
-          setTimeout(resolve, LINE_PAUSE);
-        }
-      })();
-    });
-  }
+  var Wave = {
+    el: null,
+    canvas: null,
+    ctx: null,
+    raf: 0,
+    hideTimer: 0,
+    running: false,
+    t: 0,
+    LINES: [
+      { rgb: '96,165,250',  amp: 30, freq: 2.0, speed: 0.020, phase: 0.0, alpha: 0.50 },
+      { rgb: '167,139,250', amp: 22, freq: 2.9, speed: 0.014, phase: 2.2, alpha: 0.42 },
+      { rgb: '94,234,212',  amp: 15, freq: 3.7, speed: 0.026, phase: 4.1, alpha: 0.36 },
+      { rgb: '255,255,255', amp: 9,  freq: 5.1, speed: 0.010, phase: 1.1, alpha: 0.22 }
+    ],
 
-  function playStatus(container, lines, work, finalLine) {
-    container.innerHTML = '';
-    var settled = false, value, failure;
-    var tracked = (work || Promise.resolve()).then(
-      function (v) { settled = true; value = v; },
-      function (e) { settled = true; failure = e; }
-    );
+    init: function () {
+      this.el = $('wave');
+      this.canvas = $('waveCanvas');
+      this.ctx = this.canvas.getContext('2d');
+      var self = this;
+      window.addEventListener('resize', function () { self.resize(); });
+      this.resize();
+    },
 
-    var chain = Promise.resolve();
-    lines.forEach(function (l) {
-      chain = chain.then(function () { return typeLine(container, l); });
-    });
+    resize: function () {
+      var dpr = window.devicePixelRatio || 1;
+      var w = this.el.clientWidth;
+      var h = this.el.clientHeight;
+      this.canvas.width = Math.max(1, Math.round(w * dpr));
+      this.canvas.height = Math.max(1, Math.round(h * dpr));
+      this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      if (!this.running) this.draw();
+    },
 
-    return chain
-      .then(function () {
-        if (settled) return null;
-        var last = container.lastElementChild;
-        var base = last ? last.textContent.replace(/\.+$/, '') : '';
-        var dots = 3;
-        var pulse = setInterval(function () {
-          if (!last) return;
-          dots = (dots % 3) + 1;
-          last.textContent = base + '...'.slice(0, dots);
-        }, 380);
-        return tracked.then(function () {
-          clearInterval(pulse);
-          if (last) last.textContent = base + '...';
-        });
-      })
-      .then(function () {
-        if (failure) {
-          return typeLine(container, failure.message || String(failure), 'error')
-            .then(function () { throw failure; });
-        }
-        return typeLine(container, finalLine || 'Done.').then(function () { return value; });
+    show: function () {
+      clearTimeout(this.hideTimer);
+      this.el.classList.add('on');
+      if (REDUCED_MOTION) { this.draw(); return; }
+      if (!this.running) {
+        this.running = true;
+        this.loop();
+      }
+    },
+
+    hide: function () {
+      var self = this;
+      this.el.classList.remove('on');
+      clearTimeout(this.hideTimer);
+      // Keep animating through the CSS opacity fade, then stop.
+      this.hideTimer = setTimeout(function () {
+        self.running = false;
+        cancelAnimationFrame(self.raf);
+      }, 700);
+    },
+
+    loop: function () {
+      var self = this;
+      this.raf = requestAnimationFrame(function () {
+        if (!self.running) return;
+        self.t += 1;
+        self.draw();
+        self.loop();
       });
-  }
+    },
+
+    draw: function () {
+      var ctx = this.ctx;
+      var w = this.el.clientWidth;
+      var h = this.el.clientHeight;
+      var mid = h / 2;
+      var t = REDUCED_MOTION ? 24 : this.t;
+
+      ctx.clearRect(0, 0, w, h);
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.lineWidth = 1.2;
+      ctx.lineJoin = 'round';
+
+      for (var i = 0; i < this.LINES.length; i++) {
+        var L = this.LINES[i];
+        ctx.beginPath();
+        for (var x = 0; x <= w; x += 3) {
+          var u = x / w;
+          // Gaussian envelope: full motion mid-stream, still at the edges.
+          var env = Math.exp(-Math.pow((u - 0.5) / 0.27, 2));
+          var y = mid + env * L.amp * (
+            0.66 * Math.sin(u * L.freq * TAU + t * L.speed + L.phase) +
+            0.34 * Math.sin(u * L.freq * 2.17 * TAU - t * L.speed * 0.7 + L.phase * 1.7)
+          );
+          if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        }
+        ctx.strokeStyle = 'rgba(' + L.rgb + ',' + L.alpha + ')';
+        ctx.stroke();
+      }
+    }
+  };
 
   // =======================================================================
-  // Step controller: exactly one step visible at a time.
+  // Scene manager: exactly one question on screen. Transitions fade the
+  // outgoing scene up and out, bridge on the waveform, then fade the next
+  // scene in. The waveform stays up for the processing scene.
   // =======================================================================
-  var Steps = {
-    ids: ['step-key', 'step-upload', 'step-upload-progress', 'step-refresh', 'step-month',
-      'step-generate', 'step-complete', 'step-next', 'step-done'],
+  var Scenes = {
+    current: null,
+
     show: function (id) {
-      this.ids.forEach(function (stepId) {
-        $(stepId).classList.toggle('visible', stepId === id);
+      var next = $(id);
+      var cur = this.current && this.current !== id ? $(this.current) : null;
+      this.current = id;
+      var keepWave = id === 'step-processing';
+
+      if (!REDUCED_MOTION || keepWave) Wave.show();
+
+      var out = Promise.resolve();
+      if (cur) {
+        cur.classList.add('leaving');
+        out = delay(REDUCED_MOTION ? 0 : 360).then(function () {
+          cur.classList.remove('visible', 'leaving');
+        });
+      }
+
+      return out
+        .then(function () { return delay(REDUCED_MOTION ? 0 : 220); })
+        .then(function () {
+          if (!keepWave) Wave.hide();
+          next.classList.add('visible');
+          var focusTarget = next.querySelector('[data-autofocus]') || next.querySelector('.q');
+          if (focusTarget && focusTarget.focus) {
+            try { focusTarget.focus({ preventScroll: true }); } catch (e) { focusTarget.focus(); }
+          }
+        });
+    }
+  };
+
+  // =======================================================================
+  // Status player: one intelligent status line at a time. Each message
+  // crossfades in, dwells, then yields to the next. If the real work is
+  // still pending after the last message, the line breathes until it
+  // settles. No percentages, no progress bars.
+  // =======================================================================
+  function swapText(el, text) {
+    if (REDUCED_MOTION) { el.textContent = text; return Promise.resolve(); }
+    el.classList.add('swap-out');
+    return delay(230).then(function () {
+      el.textContent = text;
+      el.classList.remove('swap-out');
+      return delay(240);
+    });
+  }
+
+  var Status = {
+    play: function (messages, work, finalLine) {
+      var el = $('statusLine');
+      el.classList.remove('holding');
+      el.textContent = '';
+
+      var settled = false, value, failure;
+      var tracked = (work || Promise.resolve()).then(
+        function (v) { settled = true; value = v; },
+        function (e) { settled = true; failure = e; }
+      );
+
+      var chain = Promise.resolve();
+      messages.forEach(function (msg) {
+        chain = chain.then(function () {
+          if (settled && failure) return null; // stop narrating a failed run
+          return swapText(el, msg).then(function () {
+            return delay(REDUCED_MOTION ? 120 : 900);
+          });
+        });
       });
+
+      return chain
+        .then(function () {
+          if (!settled) el.classList.add('holding');
+          return tracked;
+        })
+        .then(function () {
+          el.classList.remove('holding');
+          if (failure) throw failure;
+          if (finalLine) {
+            return swapText(el, finalLine)
+              .then(function () { return delay(REDUCED_MOTION ? 150 : 750); })
+              .then(function () { return value; });
+          }
+          return value;
+        });
     }
   };
 
   // =======================================================================
-  // Activity log (footer)
-  // =======================================================================
-  var ActivityLog = {
-    render: function () {
-      var a = Store.getActivity();
-      $('actUpload').textContent = a.lastUpload || '—';
-      $('actRefresh').textContent = a.lastRefresh || '—';
-      $('actGenerate').textContent = a.lastGenerate || '—';
-      $('actArchive').textContent = a.lastArchive || '—';
-      $('actStatus').textContent = a.status || 'Idle';
-      $('actErrors').textContent = a.lastErrors != null ? String(a.lastErrors) : '—';
-    }
-  };
-
-  // =======================================================================
-  // App state
+  // App state (same fields as before) + error recovery.
   // =======================================================================
   var state = {
     rows: [],
@@ -243,35 +372,84 @@
     result: null
   };
 
-  // =======================================================================
-  // Access key step
-  // =======================================================================
-  function initKey() {
-    $('btnSaveKey').addEventListener('click', function () {
-      var key = $('accessKeyInput').value.trim();
-      var status = $('keyStatus');
-      if (!key) { status.textContent = 'Enter the access key to continue.'; return; }
-      var previous = Store.getKey();
-      Store.setKey(key);
-      status.textContent = 'Verifying...';
-      Api.get('ping').then(function () {
-        status.textContent = '';
-        Steps.show('step-upload');
-      }).catch(function (err) {
-        Store.setKey(previous);
-        status.textContent = 'Connection failed: ' + err.message;
-      });
-    });
+  var retryFn = null;
+  var resumeAfterKey = null;
 
+  function fail(err, retry) {
+    retryFn = retry || null;
+    $('errorMessage').textContent = err && err.message ? err.message : String(err);
+    $('btnRetry').classList.toggle('hidden', !retryFn);
+    Scenes.show('step-error');
+  }
+
+  function initError() {
+    $('btnRetry').addEventListener('click', function () {
+      var fn = retryFn;
+      retryFn = null;
+      if (fn) fn();
+    });
     $('connectionLink').addEventListener('click', function () {
+      resumeAfterKey = retryFn;
       $('accessKeyInput').value = Store.getKey();
       $('keyStatus').textContent = '';
-      Steps.show('step-key');
+      Scenes.show('step-key');
     });
   }
 
   // =======================================================================
-  // Step 1: Upload
+  // Access key (verification logic unchanged: ping, rollback on failure)
+  // =======================================================================
+  function initKey() {
+    var input = $('accessKeyInput');
+
+    function submit() {
+      var key = input.value.trim();
+      var status = $('keyStatus');
+      if (!key) { status.textContent = 'Enter the access key to continue.'; return; }
+      var previous = Store.getKey();
+      Store.setKey(key);
+      status.textContent = 'Verifying…';
+      Api.get('ping').then(function () {
+        status.textContent = '';
+        var resume = resumeAfterKey;
+        resumeAfterKey = null;
+        if (resume) { retryFn = null; resume(); }
+        else Scenes.show('step-confirm');
+      }).catch(function (err) {
+        Store.setKey(previous);
+        status.textContent = 'Connection failed: ' + err.message;
+      });
+    }
+
+    $('btnSaveKey').addEventListener('click', submit);
+    input.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') { e.preventDefault(); submit(); }
+    });
+  }
+
+  // =======================================================================
+  // Question 1: "Done updating the file?"
+  // =======================================================================
+  function initConfirm() {
+    var note = $('confirmNote');
+
+    $('btnConfirmYes').addEventListener('click', function () {
+      note.textContent = '';
+      Scenes.show('step-upload');
+    });
+
+    $('btnConfirmNo').addEventListener('click', function () {
+      // Re-trigger the fade even if the message is already showing.
+      note.textContent = '';
+      void note.offsetWidth;
+      note.textContent = 'Please update your file first before continuing.';
+    });
+  }
+
+  // =======================================================================
+  // Question 2: the file. Parsing is unchanged; on success the workbook
+  // refresh (same backend call as the old Refresh button) runs
+  // automatically inside the processing scene.
   // =======================================================================
   function initUpload() {
     var dropzone = $('dropzone');
@@ -312,117 +490,113 @@
   }
 
   function beginUpload(parsePromise, sourceName) {
-    Steps.show('step-upload-progress');
     Store.patchActivity({ status: 'Validating upload' });
+    Scenes.show('step-processing');
 
-    playStatus($('uploadStatus'), [
-      '✓ File uploaded successfully.',
-      'Analyzing workbook...',
-      'Checking worksheet structure...',
-      'Validating sheets...'
-    ], parsePromise, 'Workbook verified.')
+    Status.play([
+      'Reading your file…',
+      'Checking worksheet structure…',
+      'Validating data…'
+    ], parsePromise)
       .then(function (rows) {
         state.rows = rows;
         Store.patchActivity({ lastUpload: sourceName + ' · ' + now(), status: 'Idle' });
-        return delay(900);
+        return refreshWorkbook();
       })
-      .then(function () { Steps.show('step-refresh'); })
-      .catch(function () {
+      .catch(function (err) {
         Store.patchActivity({ status: 'Upload failed' });
-        return delay(2400).then(function () { Steps.show('step-upload'); });
+        fail(err, function () { Scenes.show('step-upload'); });
+      });
+  }
+
+  function refreshWorkbook() {
+    Store.patchActivity({ status: 'Refreshing workbook' });
+    return Status.play([
+      'Syncing your workbook…',
+      'Refreshing pivot tables…',
+      'Updating references…'
+    ], Api.post('refreshWorkbook', {}))
+      .then(function (data) {
+        Store.patchActivity({
+          lastRefresh: data.refreshedDate + ' ' + data.refreshedTime,
+          status: 'Idle'
+        });
+        return Scenes.show('step-month');
+      })
+      .catch(function (err) {
+        Store.patchActivity({ status: 'Refresh failed' });
+        fail(err, function () {
+          Scenes.show('step-processing').then(refreshWorkbook);
+        });
       });
   }
 
   // =======================================================================
-  // Step 2: Refresh workbook
-  // =======================================================================
-  function initRefresh() {
-    $('btnRefresh').addEventListener('click', function () {
-      var btn = this;
-      btn.disabled = true;
-      Store.patchActivity({ status: 'Refreshing workbook' });
-
-      playStatus($('refreshStatus'), [
-        'Refreshing Pivot Tables...',
-        'Refreshing formulas...',
-        'Updating references...',
-        'Checking calculations...',
-        'Finalizing...'
-      ], Api.post('refreshWorkbook', {}))
-        .then(function (data) {
-          var line = $('lastRefreshLine');
-          line.textContent = 'Last Refresh · ' + data.refreshedDate + ' · ' + data.refreshedTime;
-          line.classList.remove('hidden');
-          Store.patchActivity({
-            lastRefresh: data.refreshedDate + ' ' + data.refreshedTime,
-            status: 'Idle'
-          });
-          return delay(1100);
-        })
-        .then(function () { Steps.show('step-month'); })
-        .catch(function () {
-          Store.patchActivity({ status: 'Refresh failed' });
-          btn.disabled = false;
-        });
-    });
-  }
-
-  // =======================================================================
-  // Step 3: Reporting period
+  // Question 3: the month. Year is fixed to the current year by design;
+  // selecting a month continues automatically — no submit button.
   // =======================================================================
   function initMonth() {
     var monthSelect = $('monthSelect');
-    var yearSelect = $('yearSelect');
-    var today = new Date();
+    var caption = $('generatePeriod');
+    var year = new Date().getFullYear();
+    var pending = null;
 
-    monthSelect.innerHTML = CFG.MONTH_NAMES.map(function (name, i) {
-      return '<option value="' + i + '">' + name + '</option>';
-    }).join('');
-    monthSelect.value = String(today.getMonth());
+    monthSelect.innerHTML =
+      '<option value="" disabled selected>Select a month</option>' +
+      CFG.MONTH_NAMES.map(function (name, i) {
+        return '<option value="' + i + '">' + name + '</option>';
+      }).join('');
 
-    var years = [];
-    for (var y = today.getFullYear() - CFG.YEAR_RANGE.back; y <= today.getFullYear() + CFG.YEAR_RANGE.forward; y++) {
-      years.push(y);
+    function commit() {
+      if (pending) { clearTimeout(pending); pending = null; }
+      monthSelect.disabled = true;
+      startGenerate();
     }
-    yearSelect.innerHTML = years.map(function (yr) {
-      return '<option value="' + yr + '">' + yr + '</option>';
-    }).join('');
-    yearSelect.value = String(today.getFullYear());
 
-    $('btnContinueMonth').addEventListener('click', function () {
+    monthSelect.addEventListener('change', function () {
+      if (monthSelect.value === '') return;
       var monthIndex = parseInt(monthSelect.value, 10);
-      var year = parseInt(yearSelect.value, 10);
       state.monthName = CFG.MONTH_NAMES[monthIndex];
       state.monthLabel = state.monthName + ' ' + year;
       state.monthKey = year + '-' + String(monthIndex + 1).padStart(2, '0');
-      $('generatePeriod').textContent = state.monthLabel;
-      Steps.show('step-generate');
+      caption.textContent = 'Generating for ' + state.monthLabel;
+      // Debounced so keyboard browsing through options doesn't fire early.
+      if (pending) clearTimeout(pending);
+      pending = setTimeout(commit, 1200);
+    });
+
+    monthSelect.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' && monthSelect.value !== '' && !monthSelect.disabled) {
+        e.preventDefault();
+        commit();
+      }
     });
   }
 
   // =======================================================================
-  // Step 4: Generate report
+  // Generation: same payload, same endpoint, same result handling.
   // =======================================================================
-  function initGenerate() {
-    $('btnGenerateReport').addEventListener('click', function () {
-      var btn = this;
-      btn.disabled = true;
-      Store.patchActivity({ status: 'Generating report' });
+  var generating = false;
 
-      playStatus($('generateStatus'), [
-        'Reading spreadsheet...',
-        'Loading client data...',
-        'Calculating Monthly Performance...',
-        'Generating Notes...',
-        'Refreshing Pivot Tables...',
-        'Applying formatting...',
-        'Hiding internal columns...',
-        'Saving workbook...'
+  function startGenerate() {
+    if (generating) return;
+    generating = true;
+    Store.patchActivity({ status: 'Generating report' });
+
+    Scenes.show('step-processing').then(function () {
+      Status.play([
+        'Checking STT IDs…',
+        'Matching client database…',
+        'Gathering trading data…',
+        'Calculating performance…',
+        'Updating template…',
+        'Writing spreadsheet…',
+        'Finalizing…'
       ], Api.post('generateReports', {
         monthKey: state.monthKey,
         monthLabel: state.monthLabel,
         rows: state.rows
-      }))
+      }), 'Done.')
         .then(function (data) {
           state.result = data;
           $('figSuccess').textContent = data.counts.matchedAccounts;
@@ -433,12 +607,13 @@
             lastErrors: data.counts.errorCount,
             status: 'Idle'
           });
-          return delay(900);
+          generating = false;
+          return Scenes.show('step-complete');
         })
-        .then(function () { Steps.show('step-complete'); })
-        .catch(function () {
+        .catch(function (err) {
+          generating = false;
           Store.patchActivity({ status: 'Generation failed' });
-          btn.disabled = false;
+          fail(err, startGenerate);
         });
     });
   }
@@ -461,7 +636,8 @@
   }
 
   // =======================================================================
-  // Completion screen
+  // Completion screen. The Open Updated File button uses the same URL as
+  // before (CFG.SPREADSHEET_URL) — how it is produced has not changed.
   // =======================================================================
   function initComplete() {
     $('btnOpenSheet').addEventListener('click', function () {
@@ -469,7 +645,9 @@
     });
 
     $('btnViewErrors').addEventListener('click', function () {
-      $('errorsPanel').classList.toggle('hidden');
+      var panel = $('errorsPanel');
+      panel.classList.toggle('hidden');
+      this.setAttribute('aria-expanded', panel.classList.contains('hidden') ? 'false' : 'true');
     });
 
     $('btnCopyNotes').addEventListener('click', function () {
@@ -483,7 +661,10 @@
       );
     });
 
-    $('btnToNext').addEventListener('click', function () { Steps.show('step-next'); });
+    $('btnToNext').addEventListener('click', function () {
+      $('archiveMonth').textContent = state.monthLabel;
+      Scenes.show('step-next');
+    });
   }
 
   function flashLabel(button, message) {
@@ -493,38 +674,39 @@
   }
 
   // =======================================================================
-  // Step 5: Prepare next month
+  // Archive question ("Prepare next month"). Same backend call.
   // =======================================================================
   function initNext() {
     $('btnPrepareNext').addEventListener('click', function () {
-      var btn = this;
-      btn.disabled = true;
       Store.patchActivity({ status: 'Archiving' });
 
-      playStatus($('archiveStatus'), [
-        'Creating archive...',
-        'Saving Monthly Performance - ' + state.monthLabel,
-        'Uploading archive...',
-        'Clearing report data...',
-        'Keeping formulas...',
-        'Keeping Pivot Tables...',
-        'Keeping formatting...',
-        'Preparing template...'
-      ], Api.post('prepareNextMonth', { monthLabel: state.monthLabel }))
-        .then(function (data) {
-          Store.patchActivity({
-            lastArchive: data.archiveFileName + ' · ' + now(),
-            status: 'Idle'
+      Scenes.show('step-processing').then(function () {
+        Status.play([
+          'Creating archive…',
+          'Saving Monthly Performance – ' + state.monthLabel + '…',
+          'Clearing report data…',
+          'Preparing the new month…'
+        ], Api.post('prepareNextMonth', { monthLabel: state.monthLabel }), 'All set.')
+          .then(function (data) {
+            Store.patchActivity({
+              lastArchive: data.archiveFileName + ' · ' + now(),
+              status: 'Idle'
+            });
+            $('doneMessage').textContent = 'The workbook has been archived as "' + data.archiveFileName +
+              '" and is ready for the next reporting month.';
+            return Scenes.show('step-done');
+          })
+          .catch(function (err) {
+            Store.patchActivity({ status: 'Archive failed' });
+            // Return to the question rather than blind-retrying: the backend
+            // refuses to overwrite an archive that already exists.
+            fail(err, function () { Scenes.show('step-next'); });
           });
-          $('doneMessage').textContent = 'The workbook has been archived as "' + data.archiveFileName +
-            '" and is ready for the next reporting month.';
-          return delay(900);
-        })
-        .then(function () { Steps.show('step-done'); })
-        .catch(function () {
-          Store.patchActivity({ status: 'Archive failed' });
-          btn.disabled = false;
-        });
+      });
+    });
+
+    $('btnSkipArchive').addEventListener('click', function () {
+      Scenes.show('step-complete');
     });
 
     $('btnStartOver').addEventListener('click', function () { window.location.reload(); });
@@ -534,14 +716,15 @@
   // Init
   // =======================================================================
   document.addEventListener('DOMContentLoaded', function () {
+    Wave.init();
     initKey();
+    initConfirm();
     initUpload();
-    initRefresh();
     initMonth();
-    initGenerate();
     initComplete();
     initNext();
+    initError();
     ActivityLog.render();
-    Steps.show(Store.getKey() ? 'step-upload' : 'step-key');
+    Scenes.show(Store.getKey() ? 'step-confirm' : 'step-key');
   });
 })();

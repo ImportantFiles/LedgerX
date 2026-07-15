@@ -57,7 +57,9 @@ function readClientDatabase_(spreadsheet) {
   var values = sheet.getRange(2, 1, lastRow - 1, 5).getValues();
   for (var i = 0; i < values.length; i++) {
     var row = values[i];
-    var sttId = normalizeSttId_(row[0]);
+    // Column A normally holds a bare STT ID, but extractSttId_ also
+    // accepts "Label (ID)" cells so both sides key the map identically.
+    var sttId = extractSttId_(row[0]);
 
     var record = {
       rowIndex: i + 2,

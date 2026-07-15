@@ -3,7 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>LedgerX &mdash; Monthly Performance Generator</title>
+<meta name="theme-color" content="#000000">
+<title>LedgerX</title>
 <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -13,139 +14,119 @@
 </head>
 <body>
 
-<header class="header">
-  <h1 class="title">LedgerX</h1>
-  <p class="subtitle">Monthly Performance Generator</p>
-</header>
+<!-- Liquidity waveform: visible only during transitions and processing -->
+<div id="wave" class="wave" aria-hidden="true"><canvas id="waveCanvas"></canvas></div>
 
 <main class="stage">
 
   <!-- ============ Access key (shown only when not yet connected) ============ -->
-  <section id="step-key" class="step">
-    <h2>Connect to your workbook</h2>
-    <p class="desc">Enter the access key configured in the Apps Script project. It is stored only in this
-      browser and never leaves your machine except to authenticate requests.</p>
+  <section id="step-key" class="scene">
+    <h1 class="q" tabindex="-1">Welcome.</h1>
+    <p class="sub">Enter your access key to begin.</p>
     <input id="accessKeyInput" type="password" class="key-input" autocomplete="off"
            placeholder="Access key" aria-label="Access key">
-    <button id="btnSaveKey" class="btn" type="button">Continue</button>
-    <p id="keyStatus" class="meta" aria-live="polite"></p>
+    <div class="choices">
+      <button id="btnSaveKey" class="pill pill-primary" type="button">Continue</button>
+    </div>
+    <p id="keyStatus" class="note" aria-live="polite"></p>
   </section>
 
-  <!-- ============ Step 1: Upload ============ -->
-  <section id="step-upload" class="step">
-    <p class="step-lead">Upload your Monthly Performance file to begin.</p>
-    <div id="dropzone" class="dropzone" tabindex="0" role="button"
-         aria-label="Upload Monthly Performance file">
-      <span class="dropzone-text">Drag your file here, or click to browse</span>
-      <span class="dropzone-sub">.xlsx&ensp;.csv&ensp;.tsv&ensp;.txt</span>
+  <!-- ============ Question 1: confirmation ============ -->
+  <section id="step-confirm" class="scene">
+    <h1 class="q" tabindex="-1">Done updating the file?</h1>
+    <div class="choices">
+      <button id="btnConfirmYes" class="pill" type="button">Yes</button>
+      <button id="btnConfirmNo" class="pill pill-ghost" type="button">No</button>
     </div>
-    <p class="hint">You can also paste the copied table directly onto this page (Ctrl+V).</p>
+    <p id="confirmNote" class="note" aria-live="polite"></p>
+  </section>
+
+  <!-- ============ Question 2: the file itself ============ -->
+  <section id="step-upload" class="scene">
+    <h1 class="q" tabindex="-1">Share the updated file.</h1>
+    <p class="sub">Drop it below, click to browse, or paste the copied table.</p>
+    <div id="dropzone" class="drop" tabindex="0" role="button"
+         aria-label="Upload Monthly Performance file">
+      <span class="drop-main">Drop file or click to browse</span>
+      <span class="drop-sub">.xlsx&ensp;&middot;&ensp;.csv&ensp;&middot;&ensp;.tsv&ensp;&middot;&ensp;.txt&ensp;&middot;&ensp;Ctrl+V</span>
+    </div>
     <input id="fileInput" type="file" accept=".csv,.tsv,.txt,.xls,.xlsx" hidden>
   </section>
 
-  <!-- ============ Step 1b: Upload validation ============ -->
-  <section id="step-upload-progress" class="step">
-    <div id="uploadStatus" class="status" aria-live="polite"></div>
+  <!-- ============ Question 3: reporting month (year is automatic) ============ -->
+  <section id="step-month" class="scene">
+    <h1 class="q" tabindex="-1">Which month would you like to generate?</h1>
+    <select id="monthSelect" class="month-select" aria-label="Reporting month"></select>
+    <p id="generatePeriod" class="note period" aria-live="polite"></p>
   </section>
 
-  <!-- ============ Step 2: Refresh ============ -->
-  <section id="step-refresh" class="step">
-    <h2>Refresh Monthly Performance File</h2>
-    <p class="desc">Refresh all Pivot Tables, formulas, references and calculations after the latest trading
-      data has been updated.</p>
-    <button id="btnRefresh" class="btn" type="button">Refresh</button>
-    <div id="refreshStatus" class="status" aria-live="polite"></div>
-    <p id="lastRefreshLine" class="meta hidden"></p>
+  <!-- ============ Processing: waveform + one status line at a time ============ -->
+  <section id="step-processing" class="scene scene-processing">
+    <p id="statusLine" class="status-line" aria-live="polite"></p>
   </section>
 
-  <!-- ============ Step 3: Reporting period ============ -->
-  <section id="step-month" class="step">
-    <h2>Reporting Period</h2>
-    <div class="selects">
-      <label class="select-field">
-        <span class="select-label">Reporting Month</span>
-        <select id="monthSelect" aria-label="Reporting Month"></select>
-      </label>
-      <label class="select-field">
-        <span class="select-label">Reporting Year</span>
-        <select id="yearSelect" aria-label="Reporting Year"></select>
-      </label>
+  <!-- ============ Recoverable error ============ -->
+  <section id="step-error" class="scene">
+    <h1 class="q q-small" tabindex="-1">Something needs attention.</h1>
+    <p id="errorMessage" class="sub" aria-live="assertive"></p>
+    <div class="choices">
+      <button id="btnRetry" class="pill" type="button">Try again</button>
     </div>
-    <button id="btnContinueMonth" class="btn" type="button">Continue</button>
+    <button id="connectionLink" class="quiet" type="button">Connection settings</button>
   </section>
 
-  <!-- ============ Step 4: Generate ============ -->
-  <section id="step-generate" class="step">
-    <h2>Generate Monthly Report</h2>
-    <p class="meta" id="generatePeriod"></p>
-    <button id="btnGenerateReport" class="btn" type="button">Generate Report</button>
-    <div id="generateStatus" class="status" aria-live="polite"></div>
-  </section>
-
-  <!-- ============ Step 4b: Complete ============ -->
-  <section id="step-complete" class="step">
-    <h2>Generation Complete</h2>
-    <p class="desc">Reports Generated Successfully</p>
-    <div class="figures">
-      <div class="figure">
-        <span class="figure-num" id="figSuccess">0</span>
-        <span class="figure-label">Successful</span>
-      </div>
-      <div class="figure">
-        <span class="figure-num" id="figErrors">0</span>
-        <span class="figure-label">Errors</span>
-      </div>
+  <!-- ============ Completion ============ -->
+  <section id="step-complete" class="scene">
+    <h1 class="q q-hero" tabindex="-1">Update Complete</h1>
+    <p class="sub">Your monthly performance template has been updated successfully.</p>
+    <div class="choices">
+      <button id="btnOpenSheet" class="pill pill-primary pill-large" type="button">Open Updated File</button>
     </div>
-    <div class="actions">
-      <button id="btnOpenSheet" class="btn" type="button">Open Updated Spreadsheet</button>
-      <button id="btnViewErrors" class="btn" type="button">View Errors</button>
-    </div>
-    <button id="btnCopyNotes" class="btn-quiet" type="button">Copy Notes</button>
-    <div id="errorsPanel" class="errors-panel hidden">
-      <div class="errors-scroll">
-        <table class="errors-table">
+    <p class="note reminder">Performance shown is Month-to-Date (MTD) and should not be interpreted as
+      Month-on-Month (MoM) performance.</p>
+    <p class="summary-line">
+      <span id="figSuccess">0</span> accounts updated&ensp;&middot;&ensp;
+      <button id="btnViewErrors" class="quiet-inline" type="button"
+              aria-controls="errorsPanel" aria-expanded="false"><span id="figErrors">0</span> issues</button>
+    </p>
+    <div id="errorsPanel" class="issues hidden">
+      <div class="issues-scroll">
+        <table class="issues-table">
+          <caption class="sr-only">Issues from the last generation</caption>
           <thead>
-            <tr><th>Client Name</th><th>Account</th><th>Software</th><th>Error Type</th><th>Message</th></tr>
+            <tr><th>Client</th><th>Account</th><th>Software</th><th>Issue</th><th>Details</th></tr>
           </thead>
           <tbody id="errorsTableBody"></tbody>
         </table>
       </div>
     </div>
-    <button id="btnToNext" class="btn-quiet" type="button">Continue &rarr;</button>
+    <div class="quiet-row">
+      <button id="btnCopyNotes" class="quiet" type="button">Copy notes</button>
+      <button id="btnToNext" class="quiet" type="button">Prepare next month&ensp;&rarr;</button>
+    </div>
   </section>
 
-  <!-- ============ Step 5: Prepare next month ============ -->
-  <section id="step-next" class="step">
-    <p class="step-lead">The monthly report has been completed.</p>
-    <p class="desc">Would you like to prepare the workbook for next month?</p>
-    <button id="btnPrepareNext" class="btn" type="button">Prepare Next Month</button>
-    <p class="meta">This will archive the current month's workbook and clear the report data.
-      This action cannot be undone.</p>
-    <div id="archiveStatus" class="status" aria-live="polite"></div>
+  <!-- ============ Question: archive ============ -->
+  <section id="step-next" class="scene">
+    <h1 class="q" tabindex="-1">Close out <span id="archiveMonth"></span>?</h1>
+    <p class="sub">The workbook is archived to Drive and the report data is cleared for the new month.
+      This cannot be undone.</p>
+    <div class="choices">
+      <button id="btnPrepareNext" class="pill" type="button">Yes, archive</button>
+      <button id="btnSkipArchive" class="pill pill-ghost" type="button">Not now</button>
+    </div>
   </section>
 
   <!-- ============ Done ============ -->
-  <section id="step-done" class="step">
-    <h2>All set</h2>
-    <p class="desc" id="doneMessage"></p>
-    <button id="btnStartOver" class="btn" type="button">Start New Session</button>
+  <section id="step-done" class="scene">
+    <h1 class="q" tabindex="-1">All set.</h1>
+    <p id="doneMessage" class="sub"></p>
+    <button id="btnStartOver" class="quiet" type="button">Start a new session</button>
   </section>
 
 </main>
 
-<footer class="footer">
-  <p class="disclaimer">Performance shown is Month-to-Date and should not be interpreted as Month-on-Month
-    performance.</p>
-  <div class="activity" aria-label="Activity log">
-    <div class="activity-item"><span class="activity-label">Last Upload</span><span class="activity-value" id="actUpload">&mdash;</span></div>
-    <div class="activity-item"><span class="activity-label">Last Refresh</span><span class="activity-value" id="actRefresh">&mdash;</span></div>
-    <div class="activity-item"><span class="activity-label">Last Report Generated</span><span class="activity-value" id="actGenerate">&mdash;</span></div>
-    <div class="activity-item"><span class="activity-label">Last Archive Created</span><span class="activity-value" id="actArchive">&mdash;</span></div>
-    <div class="activity-item"><span class="activity-label">Processing Status</span><span class="activity-value" id="actStatus">Idle</span></div>
-    <div class="activity-item"><span class="activity-label">Latest Errors</span><span class="activity-value" id="actErrors">&mdash;</span></div>
-  </div>
-  <button id="connectionLink" class="btn-quiet footer-link" type="button">Connection settings</button>
-</footer>
+<footer class="footer">LedgerX &copy; 2026</footer>
 
 <script src="config.js"></script>
 <script src="script.js"></script>

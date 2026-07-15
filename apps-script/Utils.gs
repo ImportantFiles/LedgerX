@@ -88,6 +88,29 @@ function normalizeSttId_(value) {
 }
 
 /**
+ * Canonical lookup key for an account. STT report Account cells embed the
+ * STT ID in parentheses after a free-form label (e.g. "_RS15 500K Tradiso
+ * (1335619)" or "$$$$ (1430184)"), while the Client Database stores the
+ * bare ID ("1335619"). This extracts the ID from either format so both
+ * sides always compare equal:
+ *   - "(digits)" present  -> the digits of the LAST such group (labels may
+ *     themselves contain earlier parenthesized numbers)
+ *   - otherwise           -> normalizeSttId_(value) (bare-ID passthrough)
+ * Returns '' for blank input. Every account map build and every client
+ * lookup MUST key on this function's output.
+ */
+function extractSttId_(value) {
+  if (value === null || value === undefined) return '';
+  var str = String(value).trim();
+  var re = /\((\d+)\)/g;
+  var match = null;
+  var m;
+  while ((m = re.exec(str)) !== null) match = m;
+  if (match) return match[1];
+  return normalizeSttId_(str);
+}
+
+/**
  * Returns true when a string is null/undefined/blank after trimming.
  */
 function isBlank_(value) {
