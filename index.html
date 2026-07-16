@@ -4,18 +4,37 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="theme-color" content="#000000">
-<title>LedgerX</title>
+<title>LedgerX — Monthly Performance Generator</title>
 <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://api.fontshare.com" crossorigin>
+<link href="https://api.fontshare.com/v2/css?f[]=satoshi@400,500,700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css">
-<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js" defer></script>
 </head>
 <body>
 
-<!-- Liquidity waveform: visible only during transitions and processing -->
-<div id="wave" class="wave" aria-hidden="true"><canvas id="waveCanvas"></canvas></div>
+<!-- ============ Boot loading: single full-width light beam ============ -->
+<div id="loader" class="loader" role="status" aria-label="Loading LedgerX">
+  <span class="loader-word">LEDGERX</span>
+  <div class="beam" aria-hidden="true">
+    <span class="beam-track"></span>
+    <span class="beam-sweep"></span>
+  </div>
+</div>
+
+<!-- ============ Header ============ -->
+<header class="header">
+  <div class="brand">
+    <span class="brand-name">LedgerX</span>
+    <span class="brand-sub">Monthly Performance Generator</span>
+  </div>
+  <div class="header-actions">
+    <button id="btnGuide" class="header-btn" type="button">Guide</button>
+    <button id="btnRefreshData" class="header-btn" type="button">Refresh Data</button>
+  </div>
+</header>
 
 <main class="stage">
 
@@ -31,68 +50,210 @@
     <p id="keyStatus" class="note" aria-live="polite"></p>
   </section>
 
-  <!-- ============ Question 1: confirmation ============ -->
-  <section id="step-confirm" class="scene">
-    <h1 class="q" tabindex="-1">Done updating the file?</h1>
+  <!-- ============ Home: month selection ============ -->
+  <section id="step-home" class="scene">
+    <h1 class="q" tabindex="-1">Select Month</h1>
+    <p id="yearHint" class="note"></p>
+    <div id="monthGrid" class="month-grid" role="group" aria-label="Select the reporting month"></div>
+
+    <aside class="info-card" role="note">
+      <span class="info-icon" aria-hidden="true">i</span>
+      <div class="info-body">
+        <span class="info-title">Important Note</span>
+        <p class="info-text">The generated performance is calculated from each client's Start Date up
+          to the selected month's end date for reporting purposes. This is <strong>not</strong> a
+          month-over-month (MoM) growth calculation.</p>
+      </div>
+    </aside>
+
+    <section id="recentSection" class="recent hidden" aria-label="Recent reports">
+      <h2 class="recent-title">Recent Reports</h2>
+      <ul id="recentList" class="recent-list"></ul>
+    </section>
+  </section>
+
+  <!-- ============ Processing: live stage tracker ============ -->
+  <section id="step-processing" class="scene">
+    <h1 id="processingTitle" class="q" tabindex="-1">Generating report</h1>
+    <div class="stage-card">
+      <ol id="stageList" class="stages" aria-live="polite"></ol>
+    </div>
+  </section>
+
+  <!-- ============ Empty state ============ -->
+  <section id="step-empty" class="scene">
+    <h1 class="q" tabindex="-1">No Data Available</h1>
+    <p class="sub">Please update the LedgerX Template before generating a report.</p>
     <div class="choices">
-      <button id="btnConfirmYes" class="pill" type="button">Yes</button>
-      <button id="btnConfirmNo" class="pill pill-ghost" type="button">No</button>
+      <button id="btnOpenGuideEmpty" class="pill pill-primary" type="button">Open Guide</button>
     </div>
-    <p id="confirmNote" class="note" aria-live="polite"></p>
-  </section>
-
-  <!-- ============ Question 2: the file itself ============ -->
-  <section id="step-upload" class="scene">
-    <h1 class="q" tabindex="-1">Share the updated file.</h1>
-    <p class="sub">Drop it below, click to browse, or paste the copied table.</p>
-    <div id="dropzone" class="drop" tabindex="0" role="button"
-         aria-label="Upload Monthly Performance file">
-      <span class="drop-main">Drop file or click to browse</span>
-      <span class="drop-sub">.xlsx&ensp;&middot;&ensp;.csv&ensp;&middot;&ensp;.tsv&ensp;&middot;&ensp;.txt&ensp;&middot;&ensp;Ctrl+V</span>
+    <div class="quiet-row">
+      <button id="btnEmptyBack" class="quiet" type="button">Back to month selection</button>
     </div>
-    <input id="fileInput" type="file" accept=".csv,.tsv,.txt,.xls,.xlsx" hidden>
-  </section>
-
-  <!-- ============ Question 3: reporting month (year is automatic) ============ -->
-  <section id="step-month" class="scene">
-    <h1 class="q" tabindex="-1">Which month would you like to generate?</h1>
-    <select id="monthSelect" class="month-select" aria-label="Reporting month"></select>
-    <p id="generatePeriod" class="note period" aria-live="polite"></p>
-  </section>
-
-  <!-- ============ Processing: waveform + one status line at a time ============ -->
-  <section id="step-processing" class="scene scene-processing">
-    <p id="statusLine" class="status-line" aria-live="polite"></p>
   </section>
 
   <!-- ============ Recoverable error ============ -->
   <section id="step-error" class="scene">
-    <h1 class="q q-small" tabindex="-1">Something needs attention.</h1>
+    <h1 class="q" tabindex="-1">Something needs attention.</h1>
     <p id="errorMessage" class="sub" aria-live="assertive"></p>
     <div class="choices">
       <button id="btnRetry" class="pill" type="button">Try again</button>
     </div>
-    <button id="connectionLink" class="quiet" type="button">Connection settings</button>
+    <div class="quiet-row">
+      <button id="btnBackHome" class="quiet" type="button">Choose another month</button>
+      <button id="connectionLink" class="quiet" type="button">Connection settings</button>
+    </div>
   </section>
 
-  <!-- ============ Completion ============ -->
+  <!-- ============ Success ============ -->
   <section id="step-complete" class="scene">
-    <h1 class="q q-hero" tabindex="-1">Update Complete</h1>
-    <p class="sub">Your monthly performance template has been updated successfully.</p>
-    <div class="choices">
-      <button id="btnOpenSheet" class="pill pill-primary pill-large" type="button">Open Updated File</button>
+    <div class="check" aria-hidden="true">&#10003;</div>
+    <h1 class="q" tabindex="-1">Report Generated</h1>
+    <p id="reportName" class="report-name"></p>
+    <p class="saved-line"><span class="saved-dot" aria-hidden="true"></span>Saved to Google Drive</p>
+
+    <div class="stat-grid" aria-label="Generation statistics">
+      <div class="stat"><span class="stat-label">Clients Processed</span><span class="stat-value" id="statClients">—</span></div>
+      <div class="stat"><span class="stat-label">Successful</span><span class="stat-value" id="figSuccess">—</span></div>
+      <div class="stat"><span class="stat-label">Errors Found</span><span class="stat-value" id="figErrors">—</span></div>
+      <div class="stat"><span class="stat-label">Success Rate</span><span class="stat-value" id="statRate">—</span></div>
+      <div class="stat"><span class="stat-label">Average Growth</span><span class="stat-value" id="statAvg">—</span></div>
+      <div class="stat"><span class="stat-label">Highest Growth</span><span class="stat-value" id="statHigh">—</span></div>
+      <div class="stat"><span class="stat-label">Lowest Growth</span><span class="stat-value" id="statLow">—</span></div>
+      <div class="stat"><span class="stat-label">Processing Time</span><span class="stat-value" id="statTime">—</span></div>
     </div>
-    <p class="note reminder">Performance shown is Month-to-Date (MTD) and should not be interpreted as
-      Month-on-Month (MoM) performance.</p>
-    <p class="summary-line">
-      <span id="figSuccess">0</span> accounts updated&ensp;&middot;&ensp;
-      <button id="btnViewErrors" class="quiet-inline" type="button"
-              aria-controls="errorsPanel" aria-expanded="false"><span id="figErrors">0</span> issues</button>
-    </p>
-    <div id="errorsPanel" class="issues hidden">
+
+    <section id="errorPreview" class="error-preview hidden" aria-label="Errors found">
+      <h2 class="recent-title">Errors Found</h2>
+      <ul id="errorPreviewList" class="preview-list"></ul>
+      <button id="btnViewFullErrors" class="quiet" type="button">View Full Errors</button>
+    </section>
+
+    <div class="choices">
+      <button id="btnOpenSheet" class="pill pill-primary" type="button">Open Report</button>
+      <button id="btnCopyNotes" class="pill" type="button">Copy Notes</button>
+      <button id="btnOpenFolder" class="pill" type="button">Open Output Folder</button>
+    </div>
+    <div class="quiet-row">
+      <button id="btnAnotherMonth" class="quiet" type="button">Generate Another Report</button>
+    </div>
+  </section>
+
+</main>
+
+<footer class="footer">
+  <p class="footer-brand">LedgerX &mdash; Monthly Performance Generator</p>
+  <p class="footer-line">Version 2.0 &middot; Google Workspace Automation</p>
+  <p class="footer-line">&copy; Ridge Capital Solutions</p>
+</footer>
+
+<!-- ============ Modals ============ -->
+<div id="modalOverlay" class="modal-overlay hidden">
+
+  <!-- Onboarding (first visit only) -->
+  <div id="onboardModal" class="modal modal-sm hidden" role="dialog" aria-modal="true"
+       aria-labelledby="onboardTitle" tabindex="-1">
+    <h2 id="onboardTitle" class="modal-title">Welcome to LedgerX</h2>
+    <p class="modal-eyebrow">Monthly Performance Report Generator</p>
+    <p class="modal-text">LedgerX automatically validates your trading data, calculates client
+      performance, generates reporting summaries, detects data issues, and creates a ready-to-use
+      report for GHL.</p>
+    <div class="choices">
+      <button id="btnViewGuide" class="pill" type="button">View Guide</button>
+      <button id="btnGetStarted" class="pill pill-primary" type="button">Get Started</button>
+    </div>
+  </div>
+
+  <!-- Guide -->
+  <div id="guideModal" class="modal modal-lg hidden" role="dialog" aria-modal="true"
+       aria-labelledby="guideTitle" tabindex="-1">
+    <button class="modal-close" data-close type="button" aria-label="Close guide">&#10005;</button>
+    <div class="modal-scroll">
+      <h2 id="guideTitle" class="modal-title">How to Generate Monthly Performance Report</h2>
+
+      <div class="guide-step">
+        <span class="guide-step-num">Step 1</span>
+        <h3 class="guide-h">Update the LedgerX Template</h3>
+        <p class="modal-text">Populate the template using the following sources.</p>
+
+        <h4 class="guide-sub">Client Database</h4>
+        <p class="modal-text">Source:
+          <a href="https://docs.google.com/spreadsheets/d/1ZkUQE4XA3qpMlmUIw11nvAt8ekctwFaZ-4E7Lgsmn6c/edit?gid=318424275#gid=318424275"
+             target="_blank" rel="noopener">Account Tracker</a> &middot; Sheet: <em>Account Tracker</em></p>
+        <ul class="guide-list">
+          <li>Copy Columns A to C.</li>
+          <li>Paste as VALUES ONLY.</li>
+          <li>Replace every &ldquo;N/A&rdquo; with blank cells.</li>
+          <li>Keep numbers as numbers.</li>
+          <li>Do not modify column structure.</li>
+        </ul>
+
+        <h4 class="guide-sub">Raw Data</h4>
+        <p class="modal-text">Source: <em>STT Dashboard</em> &middot; Navigate: <em>Trades</em></p>
+        <ul class="guide-list">
+          <li>Copy every page.</li>
+          <li>Copy the entire table.</li>
+          <li>Paste as VALUES ONLY into Raw Data.</li>
+          <li>Include every page.</li>
+          <li>Preserve the original format.</li>
+        </ul>
+      </div>
+
+      <div class="guide-step">
+        <span class="guide-step-num">Step 2</span>
+        <p class="modal-text">After updating the LedgerX Template, open LedgerX.</p>
+      </div>
+
+      <div class="guide-step">
+        <span class="guide-step-num">Step 3</span>
+        <p class="modal-text">Select the reporting month. The current year is detected automatically
+          &mdash; you never choose the year.</p>
+      </div>
+
+      <div class="guide-step">
+        <span class="guide-step-num">Step 4</span>
+        <p class="modal-text">LedgerX automatically:</p>
+        <ul class="guide-list">
+          <li>Reads the updated template</li>
+          <li>Validates records</li>
+          <li>Calculates performance</li>
+          <li>Detects errors</li>
+          <li>Generates summaries</li>
+          <li>Creates the Performance Summary spreadsheet</li>
+          <li>Saves it into Google Drive</li>
+        </ul>
+        <p class="modal-text">No manual processing required.</p>
+      </div>
+
+      <div class="guide-step">
+        <span class="guide-step-num">Step 5</span>
+        <p class="modal-text">When processing finishes, review: <em>Performance Summary</em> and
+          <em>Errors</em> (if any).</p>
+      </div>
+
+      <div class="guide-step">
+        <span class="guide-step-num">Step 6</span>
+        <p class="modal-text">Copy the generated note and paste it directly into GHL.
+          No additional formatting required.</p>
+      </div>
+
+      <div class="guide-help">
+        <h4 class="guide-sub">Need Help?</h4>
+        <p class="modal-text">Ensure the LedgerX Template has been updated before generating reports.
+          LedgerX only processes the latest available data.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Full errors -->
+  <div id="errorsModal" class="modal modal-lg hidden" role="dialog" aria-modal="true"
+       aria-labelledby="errorsTitle" tabindex="-1">
+    <button class="modal-close" data-close type="button" aria-label="Close errors">&#10005;</button>
+    <div class="modal-scroll">
+      <h2 id="errorsTitle" class="modal-title">Errors</h2>
       <div class="issues-scroll">
         <table class="issues-table">
-          <caption class="sr-only">Issues from the last generation</caption>
+          <caption class="sr-only">All issues from the last generation</caption>
           <thead>
             <tr><th>Client</th><th>Account</th><th>Software</th><th>Issue</th><th>Details</th></tr>
           </thead>
@@ -100,33 +261,9 @@
         </table>
       </div>
     </div>
-    <div class="quiet-row">
-      <button id="btnCopyNotes" class="quiet" type="button">Copy notes</button>
-      <button id="btnToNext" class="quiet" type="button">Prepare next month&ensp;&rarr;</button>
-    </div>
-  </section>
+  </div>
 
-  <!-- ============ Question: archive ============ -->
-  <section id="step-next" class="scene">
-    <h1 class="q" tabindex="-1">Close out <span id="archiveMonth"></span>?</h1>
-    <p class="sub">The workbook is archived to Drive and the report data is cleared for the new month.
-      This cannot be undone.</p>
-    <div class="choices">
-      <button id="btnPrepareNext" class="pill" type="button">Yes, archive</button>
-      <button id="btnSkipArchive" class="pill pill-ghost" type="button">Not now</button>
-    </div>
-  </section>
-
-  <!-- ============ Done ============ -->
-  <section id="step-done" class="scene">
-    <h1 class="q" tabindex="-1">All set.</h1>
-    <p id="doneMessage" class="sub"></p>
-    <button id="btnStartOver" class="quiet" type="button">Start a new session</button>
-  </section>
-
-</main>
-
-<footer class="footer">LedgerX &copy; 2026</footer>
+</div>
 
 <script src="config.js"></script>
 <script src="script.js"></script>

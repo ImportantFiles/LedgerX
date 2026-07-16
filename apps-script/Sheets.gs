@@ -1,28 +1,36 @@
 /**
  * Sheets.gs
- * Low-level access to the single existing spreadsheet. Every read/write
- * to Google Sheets goes through this file so batching and layout
- * assumptions stay in one place.
+ * Low-level access to Google Sheets. Every read/write goes through this
+ * file so batching and layout assumptions stay in one place.
  *
- * IMPORTANT: This project never creates a new spreadsheet file. All
- * sheets referenced below are tabs inside the one existing workbook
- * identified by SPREADSHEET_ID.
+ * Two spreadsheets are involved:
+ *  - The MAIN workbook (SPREADSHEET_ID): exactly two permanent tabs -
+ *    Client Database and Raw Data. Nothing is generated into it.
+ *  - The OUTPUT file: "{Month} {Year} Performance Summary", created (or
+ *    rewritten) by each generation inside the designated Drive folder
+ *    (OUTPUT_FOLDER_ID), containing the Performance Summary sheet and
+ *    the Errors sheet.
  */
 
 // ---- Workbook configuration -------------------------------------------
 var SPREADSHEET_ID = '1C2NX5ImumLfOxyopBHr_xOvwSOQod7bf8yzRTJHX_Yo';
 var CLIENT_SHEET_NAME = 'Client Database';
-var SUMMARY_SHEET_NAME = 'Generated Summary';
+var RAW_DATA_SHEET_NAME = 'Raw Data';
+var LEGACY_RAW_DATA_SHEET_NAME = 'STT Import'; // accepted until the tab is renamed
 var ERRORS_SHEET_NAME = 'Errors';
 var REPORT_SHEET_PREFIX = 'Generated Report - ';
 var UNKNOWN_GROUP_LABEL = 'Unknown';
-var PROTECTION_DESCRIPTION = 'LedgerX: locked report columns (auto-managed)';
-var SUMMARY_PROTECTED_COLUMNS = { start: 1, end: 6 }; // A:F
+
+// ---- Output configuration ----------------------------------------------
+// Every generated Performance Summary spreadsheet is saved to this Drive
+// folder and nowhere else.
+var OUTPUT_FOLDER_ID = '1tkZxSgzWrjv2Ot-zV7J6pAZ4pIEJ3oRi';
+var OUTPUT_SUMMARY_SHEET_NAME = 'Performance Summary';
 
 var REPORT_HEADERS_ = ['STT ID', 'Name', 'System', 'AM', 'Note'];
 var ERROR_HEADERS_ = ['Client Name', 'Account Number', 'Software', 'Error Type', 'Detailed Error Message', 'Timestamp'];
 
-/** Returns the single existing spreadsheet. Never call SpreadsheetApp.create(). */
+/** Returns the main workbook (Client Database / Raw Data). */
 function getSpreadsheet_() {
   return SpreadsheetApp.openById(SPREADSHEET_ID);
 }
@@ -98,19 +106,122 @@ function writeClientNotes_(clientDb, noteBySttId) {
 }
 
 /**
- * Returns the report sheet for a given AM group, creating it (with
- * header row only) if it does not already exist. Existing sheets keep
- * their formatting, formulas, and name untouched.
+ * Reads the Monthly Performance table from the "Raw Data" sheet (the
+ * legacy "STT Import" tab name is accepted until it is renamed).
+ * The header row is located automatically within the first 10 rows (so a
+ * paste that starts a row or two down still works), columns are matched
+ * by alias (STT_IMPORT_ALIASES_ in Utils.gs), extra columns (Trades, Won,
+ * Lots, ...) are ignored, and fully blank rows are skipped.
+ * Returns rows in the exact shape evaluateSttRow_ expects.
  */
-function getOrCreateReportSheet_(spreadsheet, amLabel) {
-  var name = REPORT_SHEET_PREFIX + amLabel;
-  var sheet = spreadsheet.getSheetByName(name);
+function readRawData_(spreadsheet) {
+  var sheet = spreadsheet.getSheetByName(RAW_DATA_SHEET_NAME) ||
+    spreadsheet.getSheetByName(LEGACY_RAW_DATA_SHEET_NAME);
   if (!sheet) {
-    sheet = spreadsheet.insertSheet(name);
-    sheet.getRange(1, 1, 1, REPORT_HEADERS_.length).setValues([REPORT_HEADERS_]);
-    sheet.setFrozenRows(1);
+    throw new Error('Required sheet "' + RAW_DATA_SHEET_NAME + '" was not found in the ' +
+      'workbook. Create it and paste the Monthly Performance table into it.');
   }
-  return sheet;
+  var lastRow = sheet.getLastRow();
+  var lastCol = sheet.getLastColumn();
+  if (lastRow < 2 || lastCol < 1) {
+    throw new Error('"' + RAW_DATA_SHEET_NAME + '" has no data. Paste the Monthly ' +
+      'Performance table (including its header row) into it, then try again.');
+  }
+
+  var values = sheet.getRange(1, 1, lastRow, lastCol).getValues();
+
+  var colIndex = null;
+  var headerRow = -1;
+  for (var r = 0; r < Math.min(values.length, 10); r++) {
+    colIndex = detectSttColumns_(values[r]);
+    if (colIndex) { headerRow = r; break; }
+  }
+  if (!colIndex) {
+    throw new Error('Could not find an Account / STT ID header row in "' +
+      RAW_DATA_SHEET_NAME + '". Paste the table with its header row included.');
+  }
+
+  var missing = ['balance', 'equity', 'deposit'].filter(function (f) {
+    return colIndex[f] === undefined;
+  });
+  if (missing.length) {
+    throw new Error('"' + RAW_DATA_SHEET_NAME + '" is missing required column(s): ' +
+      missing.join(', ') + '. Expected headers like Balance, Equity and Deposits.');
+  }
+
+  function pick(cells, idx) { return idx === undefined ? undefined : cells[idx]; }
+
+  var rows = [];
+  for (var i = headerRow + 1; i < values.length; i++) {
+    var cells = values[i];
+    var allBlank = cells.every(function (c) {
+      return String(c === null || c === undefined ? '' : c).trim() === '';
+    });
+    if (allBlank) continue;
+    rows.push({
+      sttId: pick(cells, colIndex.sttId),
+      deposit: pick(cells, colIndex.deposit),
+      withdrawal: pick(cells, colIndex.withdrawal),
+      closedProfit: pick(cells, colIndex.closedProfit),
+      balance: pick(cells, colIndex.balance),
+      equity: pick(cells, colIndex.equity)
+    });
+  }
+  if (rows.length === 0) {
+    throw new Error('"' + RAW_DATA_SHEET_NAME + '" has a header row but no data rows.');
+  }
+  return rows;
+}
+
+/**
+ * Writes the generated report into its own output spreadsheet named
+ * "{Month} {Year} Performance Summary", saved in the designated Drive
+ * folder (OUTPUT_FOLDER_ID) - never anywhere else, and never inside the
+ * main workbook. If a file with that name already exists in the folder,
+ * it is rewritten in place (re-running a month updates the same file
+ * instead of piling up copies). The file contains two sheets:
+ * "Performance Summary" and "Errors".
+ * Returns { name, url, folderUrl } for the frontend's buttons.
+ */
+function writeOutputFile_(monthLabel, summaryRows, errorRows) {
+  var folder = DriveApp.getFolderById(OUTPUT_FOLDER_ID);
+  var name = monthLabel + ' Performance Summary';
+
+  var existing = folder.getFilesByName(name);
+  var output;
+  if (existing.hasNext()) {
+    output = SpreadsheetApp.openById(existing.next().getId());
+  } else {
+    output = SpreadsheetApp.create(name);
+    DriveApp.getFileById(output.getId()).moveTo(folder);
+  }
+
+  // Sheet 1: Performance Summary. On a fresh file, rename the default
+  // first sheet instead of leaving an empty "Sheet1" behind.
+  var summarySheet = output.getSheetByName(OUTPUT_SUMMARY_SHEET_NAME);
+  if (!summarySheet) {
+    var sheets = output.getSheets();
+    if (sheets.length === 1 && sheets[0].getLastRow() === 0) {
+      summarySheet = sheets[0].setName(OUTPUT_SUMMARY_SHEET_NAME);
+    } else {
+      summarySheet = output.insertSheet(OUTPUT_SUMMARY_SHEET_NAME, 0);
+    }
+  }
+  summarySheet.getRange(1, 1, 1, REPORT_HEADERS_.length).setValues([REPORT_HEADERS_]);
+  summarySheet.setFrozenRows(1);
+  clearDataRows_(summarySheet);
+  writeReportRows_(summarySheet, summaryRows);
+
+  // Sheet 2: Errors.
+  var errorsSheet = output.getSheetByName(ERRORS_SHEET_NAME);
+  if (!errorsSheet) {
+    errorsSheet = output.insertSheet(ERRORS_SHEET_NAME);
+    errorsSheet.setFrozenRows(1);
+  }
+  writeErrorRows_(errorsSheet, errorRows);
+
+  SpreadsheetApp.flush();
+  return { name: name, url: output.getUrl(), folderUrl: folder.getUrl() };
 }
 
 /**
@@ -132,55 +243,18 @@ function writeReportRows_(sheet, rows) {
   sheet.getRange(2, 1, rows.length, REPORT_HEADERS_.length).setValues(rows);
 }
 
-/** Returns (creating if needed) the Errors sheet with its header. */
-function getOrCreateErrorsSheet_(spreadsheet) {
-  var sheet = spreadsheet.getSheetByName(ERRORS_SHEET_NAME);
-  if (!sheet) {
-    sheet = spreadsheet.insertSheet(ERRORS_SHEET_NAME);
-    sheet.setFrozenRows(1);
-  }
-  return sheet;
-}
-
 /**
- * Clears the Errors sheet, rewrites its header row (idempotent, so a
+ * Clears an Errors sheet, rewrites its header row (idempotent, so a
  * pre-existing sheet with stale headers is corrected), then batch-writes
- * the new error rows. rows = [[clientName, account, software, errorType,
- * message, timestamp], ...]
+ * the new error rows. Used only on the output spreadsheet's Errors
+ * sheet. rows = [[clientName, account, software, errorType, message,
+ * timestamp], ...]
  */
 function writeErrorRows_(sheet, rows) {
   sheet.getRange(1, 1, 1, ERROR_HEADERS_.length).setValues([ERROR_HEADERS_]);
   clearDataRows_(sheet);
   if (rows.length === 0) return;
   sheet.getRange(2, 1, rows.length, ERROR_HEADERS_.length).setValues(rows);
-}
-
-/**
- * Hides and protects columns A:F on the Generated Summary sheet. If a
- * matching protection already exists (identified by description), it is
- * updated in place rather than duplicated.
- */
-function protectSummaryColumns_(spreadsheet) {
-  var sheet = requireSheet_(spreadsheet, SUMMARY_SHEET_NAME);
-  var start = SUMMARY_PROTECTED_COLUMNS.start;
-  var count = SUMMARY_PROTECTED_COLUMNS.end - SUMMARY_PROTECTED_COLUMNS.start + 1;
-
-  sheet.hideColumns(start, count);
-
-  var protections = sheet.getProtections(SpreadsheetApp.ProtectionType.RANGE);
-  var existing = null;
-  for (var i = 0; i < protections.length; i++) {
-    if (protections[i].getDescription() === PROTECTION_DESCRIPTION) {
-      existing = protections[i];
-      break;
-    }
-  }
-
-  var range = sheet.getRange(1, start, Math.max(sheet.getMaxRows(), 1), count);
-  var protection = existing || range.protect();
-  protection.setDescription(PROTECTION_DESCRIPTION);
-  protection.setRange(range);
-  if (protection.canDomainEdit()) protection.setDomainEdit(false);
 }
 
 /**

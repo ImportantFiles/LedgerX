@@ -105,7 +105,10 @@ function evaluateSttRow_(row, clientDb, seenIds, monthLabel) {
     };
   }
 
-  var netDeposit = roundTo2_(depositNum - withdrawalNum);
+  // The STT export reports withdrawals as negative amounts ("-543,902.27"
+  // means money out); older exports used positive totals. Taking the
+  // absolute value makes Net Deposit correct under both conventions.
+  var netDeposit = roundTo2_(depositNum - Math.abs(withdrawalNum));
   var growthPct;
   if (netDeposit === 0) {
     issues.push({ issue: ISSUES_.GROWTH_FAILED, details: 'Net Deposit is zero, growth percentage is undefined (division by zero).' });
@@ -145,32 +148,43 @@ function buildUnknownNote_(monthLabel, issues) {
 }
 
 /**
- * Main entry point for report generation. Reads the Client Database
- * fresh (never trusts client-cached data), classifies every imported STT
- * row, writes report sheets grouped by AM, writes the Errors sheet,
- * updates Client Database notes, refreshes calculations, protects the
- * Generated Summary sheet, and stamps Last Updated. Notes use the month
- * name alone (e.g. "July: ...") while the Last Updated stamp uses the
- * full "{Month} {Year}" label.
+ * Main entry point for report generation. Reads the STT rows from the
+ * workbook's "Raw Data" sheet (a payload that still carries pre-parsed
+ * rows keeps working for backward compatibility), reads the Client
+ * Database fresh, classifies every row, then writes the consolidated
+ * report (grouped by AM, Unknown group last) into a NEW spreadsheet -
+ * "{Month} {Year} Performance Summary" in the designated Drive folder -
+ * containing a Performance Summary sheet and an Errors sheet. The main
+ * workbook itself only receives the Errors log and updated Client
+ * Database notes; the summary never lives in the main workbook. Notes
+ * use the month name alone (e.g. "July: ...") while the Last Updated
+ * stamp uses the full "{Month} {Year}" label.
  */
 function generateReports_(payload) {
-  if (!payload || !Array.isArray(payload.rows) || payload.rows.length === 0) {
-    throw new Error('No STT rows were provided.');
+  if (!payload) {
+    throw new Error('Missing request payload.');
   }
   var monthLabel = payload.monthLabel || monthKeyToLabel_(payload.monthKey);
   var noteMonth = monthNameFromKey_(payload.monthKey) || monthLabel;
   var spreadsheet = getSpreadsheet_();
+
+  var sttRows = (Array.isArray(payload.rows) && payload.rows.length > 0)
+    ? payload.rows
+    : readRawData_(spreadsheet);
+
   var clientDb = readClientDatabase_(spreadsheet);
   var timestamp = Utilities.formatDate(new Date(), spreadsheet.getSpreadsheetTimeZone(), 'yyyy-MM-dd HH:mm:ss');
 
   var seenIds = {};
-  var groups = {}; // amLabel -> [ [sttId,name,system,am,note], ... ]
+  var entries = []; // { row: [sttId,name,system,am,note], groupLabel, name }
+  var groupLabels = {};
   var errorRows = []; // [ [clientName, account, software, errorType, message, timestamp], ... ]
   var noteUpdates = {};
+  var growthValues = []; // growthPct of every successfully matched account
 
   var counts = { total: 0, matched: 0, unknown: 0, zeroBalance: 0, errors: 0 };
 
-  payload.rows.forEach(function (row) {
+  sttRows.forEach(function (row) {
     counts.total++;
     var result = evaluateSttRow_(row, clientDb, seenIds, noteMonth);
 
@@ -191,53 +205,75 @@ function generateReports_(payload) {
     }
 
     var groupLabel = result.isUnknown ? UNKNOWN_GROUP_LABEL : result.am;
-    if (!groups[groupLabel]) groups[groupLabel] = [];
-    groups[groupLabel].push([result.sttId, result.name, result.system, result.am, result.note]);
+    groupLabels[groupLabel] = true;
+    entries.push({
+      row: [result.sttId, result.name, result.system, result.am, result.note],
+      groupLabel: groupLabel,
+      name: String(result.name || '')
+    });
 
     if (result.isUnknown) {
       counts.unknown++;
     } else {
       counts.matched++;
       noteUpdates[result.sttId] = result.note;
+      growthValues.push(result.growthPct);
     }
   });
 
-  // Clear every existing report sheet's data rows before rewriting, so an
-  // AM group that has no accounts this run doesn't retain stale rows.
-  var allSheets = spreadsheet.getSheets();
-  allSheets.forEach(function (sheet) {
-    if (sheet.getName().indexOf(REPORT_SHEET_PREFIX) === 0) {
-      clearDataRows_(sheet);
-    }
-  });
+  // Aggregate growth statistics for the frontend's summary cards. Purely
+  // additive - individual calculations are untouched.
+  var growthStats = null;
+  if (growthValues.length > 0) {
+    var sum = 0, hi = growthValues[0], lo = growthValues[0];
+    growthValues.forEach(function (g) {
+      sum += g;
+      if (g > hi) hi = g;
+      if (g < lo) lo = g;
+    });
+    growthStats = {
+      averageGrowth: roundTo2_(sum / growthValues.length),
+      highestGrowth: hi,
+      lowestGrowth: lo
+    };
+  }
 
-  var reportsWritten = 0;
-  Object.keys(groups).forEach(function (amLabel) {
-    var sheet = getOrCreateReportSheet_(spreadsheet, amLabel);
-    writeReportRows_(sheet, groups[amLabel]);
-    reportsWritten++;
+  // One consolidated summary: grouped by AM alphabetically, the Unknown
+  // group always last, clients A-Z within each group.
+  entries.sort(function (a, b) {
+    var aUnknown = a.groupLabel === UNKNOWN_GROUP_LABEL ? 1 : 0;
+    var bUnknown = b.groupLabel === UNKNOWN_GROUP_LABEL ? 1 : 0;
+    if (aUnknown !== bUnknown) return aUnknown - bUnknown;
+    var byGroup = a.groupLabel.localeCompare(b.groupLabel);
+    if (byGroup !== 0) return byGroup;
+    return a.name.localeCompare(b.name);
   });
+  var summaryRows = entries.map(function (e) { return e.row; });
 
-  var errorsSheet = getOrCreateErrorsSheet_(spreadsheet);
-  writeErrorRows_(errorsSheet, errorRows);
+  // The report AND the error log live in the output spreadsheet in the
+  // Drive folder; the main workbook (Client Database + Raw Data only) is
+  // never written to except for Client Database notes.
+  var outputFile = writeOutputFile_(monthLabel, summaryRows, errorRows);
 
   writeClientNotes_(clientDb, noteUpdates);
 
   refreshCalculations_(spreadsheet);
-  protectSummaryColumns_(spreadsheet);
   var skippedNamedRanges = updateLastUpdated_(spreadsheet, monthLabel);
 
   return {
     monthLabel: monthLabel,
+    outputFile: { name: outputFile.name, url: outputFile.url },
+    folderUrl: outputFile.folderUrl,
+    stats: growthStats,
     counts: {
       totalAccounts: counts.total,
       matchedAccounts: counts.matched,
       unknownAccounts: counts.unknown,
       zeroBalanceAccounts: counts.zeroBalance,
-      generatedReports: reportsWritten,
+      generatedReports: 1,
       errorCount: errorRows.length
     },
-    groups: Object.keys(groups),
+    groups: Object.keys(groupLabels),
     errors: errorRows.map(function (r) {
       return { clientName: r[0], sttId: r[1], software: r[2], issue: r[3], details: r[4], timestamp: r[5] };
     }),

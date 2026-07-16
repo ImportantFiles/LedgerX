@@ -111,6 +111,39 @@ function extractSttId_(value) {
 }
 
 /**
+ * Header aliases for the "STT Import" sheet. Matching is case-insensitive
+ * on trimmed cell text; the first alias found wins. "profit" is included
+ * because the STT export names its closed-profit column simply "Profit".
+ */
+var STT_IMPORT_ALIASES_ = {
+  sttId: ['stt id', 'account', 'account id', 'account number', 'stt', 'login'],
+  deposit: ['total deposit', 'deposit', 'deposits'],
+  withdrawal: ['total withdrawal', 'withdrawal', 'withdrawals'],
+  closedProfit: ['closed profit', 'closed p/l', 'closed pl', 'profit'],
+  balance: ['balance'],
+  equity: ['equity']
+};
+
+/**
+ * Maps a header row to { field: columnIndex } using STT_IMPORT_ALIASES_.
+ * Returns null when no Account / STT ID column is present, which callers
+ * use to conclude "this row is not the header row".
+ */
+function detectSttColumns_(headerCells) {
+  var header = headerCells.map(function (h) {
+    return String(h === null || h === undefined ? '' : h).trim().toLowerCase();
+  });
+  var colIndex = {};
+  Object.keys(STT_IMPORT_ALIASES_).forEach(function (field) {
+    var aliases = STT_IMPORT_ALIASES_[field];
+    for (var i = 0; i < header.length; i++) {
+      if (aliases.indexOf(header[i]) !== -1) { colIndex[field] = i; break; }
+    }
+  });
+  return colIndex.sttId === undefined ? null : colIndex;
+}
+
+/**
  * Returns true when a string is null/undefined/blank after trimming.
  */
 function isBlank_(value) {
