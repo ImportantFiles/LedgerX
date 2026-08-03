@@ -1,17 +1,12 @@
 /**
  * script.js
- * LedgerX v2.0 — premium enterprise frontend.
+ * LedgerX frontend - a guided, one-step-at-a-time flow:
  *
- * Flow: boot beam -> access key (once) -> onboarding modal (first visit
- * only) -> month selection -> automatic processing with a live stage
- * tracker -> Report Generated with stats, error preview, and Open
- * Report / Open Output Folder / Generate Another Report.
+ *   Upload File -> Refresh Workbook -> Select Period -> Generate -> Results -> Prepare Next Month
  *
- * Business logic is untouched: same Apps Script endpoints, same payload
- * shapes, same auth. The backend reads the template's Raw Data sheet,
- * matches the Client Database, and writes "{Month} {Year} Performance
- * Summary" into the designated Drive folder. The year is always the
- * current system year. No uploads, no confirmations.
+ * All business logic (matching, calculations, note text, error rules)
+ * lives in the Apps Script backend; this file only parses the uploaded
+ * table into rows, drives the step transitions, and renders results.
  */
 (function () {
   'use strict';
@@ -22,9 +17,6 @@
   function delay(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
   function now() { return new Date().toLocaleString(); }
 
-  var REDUCED_MOTION = !!(window.matchMedia &&
-    window.matchMedia('(prefers-reduced-motion: reduce)').matches);
-
   function escapeHtml(str) {
     return String(str == null ? '' : str).replace(/[&<>"']/g, function (c) {
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
@@ -32,9 +24,7 @@
   }
 
   // =======================================================================
-  // Persistence (localStorage): access key, activity log, onboarding flag,
-  // recent reports. Activity log has no on-page display; render is no-op
-  // safe so the recording behavior is preserved.
+  // Persistence: access key + activity log (localStorage only)
   // =======================================================================
   var Store = {
     getKey: function () { return localStorage.getItem(CFG.STORAGE_KEYS.ACCESS_KEY) || ''; },
@@ -46,15 +36,14 @@
     patchActivity: function (patch) {
       var merged = Object.assign(this.getActivity(), patch);
       localStorage.setItem(CFG.STORAGE_KEYS.ACTIVITY, JSON.stringify(merged));
-    },
-    isOnboarded: function () { return localStorage.getItem(CFG.STORAGE_KEYS.ONBOARDED) === '1'; },
-    setOnboarded: function () { localStorage.setItem(CFG.STORAGE_KEYS.ONBOARDED, '1'); }
+      ActivityLog.render();
+    }
   };
 
   // =======================================================================
   // API client. POST bodies are sent as text/plain (containing JSON) to
   // stay inside the CORS "simple request" rules - Apps Script web apps
-  // cannot answer a CORS preflight (OPTIONS) request. Unchanged.
+  // cannot answer a CORS preflight (OPTIONS) request.
   // =======================================================================
   var Api = {
     get: function (action) {
@@ -80,433 +69,394 @@
   };
 
   // =======================================================================
-  // Modal manager: fade+scale panels over a frosted overlay. Closes on X,
-  // outside click, or Escape. Focus moves into the dialog and returns to
-  // the opener on close.
+  // Table parsing: uploaded file or pasted text -> structured STT rows.
+  // Extra columns in the source are ignored; only aliased columns are read.
   // =======================================================================
-  var Modal = {
-    opener: null,
-
-    open: function (id) {
-      var overlay = $('modalOverlay');
-      var modals = overlay.querySelectorAll('.modal');
-      for (var i = 0; i < modals.length; i++) modals[i].classList.add('hidden');
-      this.opener = document.activeElement;
-      overlay.classList.remove('hidden');
-      var modal = $(id);
-      modal.classList.remove('hidden');
-      try { modal.focus({ preventScroll: true }); } catch (e) { modal.focus(); }
-    },
-
-    current: function () {
-      var overlay = $('modalOverlay');
-      if (overlay.classList.contains('hidden')) return null;
-      var open = overlay.querySelector('.modal:not(.hidden)');
-      return open ? open.id : null;
-    },
-
-    close: function () {
-      var openId = this.current();
-      if (!openId) return;
-      if (openId === 'onboardModal') Store.setOnboarded();
-      $('modalOverlay').classList.add('hidden');
-      var modals = $('modalOverlay').querySelectorAll('.modal');
-      for (var i = 0; i < modals.length; i++) modals[i].classList.add('hidden');
-      if (this.opener && this.opener.focus) {
-        try { this.opener.focus({ preventScroll: true }); } catch (e) { /* noop */ }
-      }
-      this.opener = null;
-    }
-  };
-
-  function initModals() {
-    $('modalOverlay').addEventListener('click', function (e) {
-      if (e.target === this) Modal.close();
-    });
-    document.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape') Modal.close();
-    });
-    var closers = document.querySelectorAll('[data-close]');
-    for (var i = 0; i < closers.length; i++) {
-      closers[i].addEventListener('click', function () { Modal.close(); });
-    }
-
-    // Onboarding
-    $('btnGetStarted').addEventListener('click', function () {
-      Store.setOnboarded();
-      Modal.close();
-    });
-    $('btnViewGuide').addEventListener('click', function () {
-      Store.setOnboarded();
-      Modal.open('guideModal');
-    });
-  }
-
-  // =======================================================================
-  // Header: Guide opens the in-app guide; Refresh Data flushes pending
-  // workbook recalculations (same backend action as always).
-  // =======================================================================
-  function initHeader() {
-    $('btnGuide').addEventListener('click', function () { Modal.open('guideModal'); });
-
-    var btn = $('btnRefreshData');
-    btn.addEventListener('click', function () {
-      if (btn.disabled || generating) return;
-      var original = btn.textContent;
-      btn.disabled = true;
-      btn.textContent = 'Refreshing…';
-      Api.post('refreshWorkbook', {})
-        .then(function () { btn.textContent = 'Refreshed ✓'; })
-        .catch(function () { btn.textContent = 'Refresh failed'; })
-        .then(function () {
-          return delay(2000);
-        })
-        .then(function () {
-          btn.textContent = original;
-          btn.disabled = false;
-        });
-    });
-  }
-
-  // =======================================================================
-  // Scene manager: exactly one scene on screen with fade transitions.
-  // =======================================================================
-  var Scenes = {
-    current: null,
-
-    show: function (id) {
-      var next = $(id);
-      var cur = this.current && this.current !== id ? $(this.current) : null;
-      this.current = id;
-
-      var out = Promise.resolve();
-      if (cur) {
-        cur.classList.add('leaving');
-        out = delay(REDUCED_MOTION ? 0 : 280).then(function () {
-          cur.classList.remove('visible', 'leaving');
-        });
-      }
-
-      return out.then(function () {
-        next.classList.add('visible');
-        var focusTarget = next.querySelector('[data-autofocus]') || next.querySelector('.q');
-        if (focusTarget && focusTarget.focus) {
-          try { focusTarget.focus({ preventScroll: true }); } catch (e) { focusTarget.focus(); }
+  var TableData = {
+    detectColumns: function (headerCells) {
+      var header = headerCells.map(function (h) {
+        return String(h == null ? '' : h).trim().toLowerCase();
+      });
+      var colIndex = {};
+      Object.keys(CFG.STT_COLUMN_ALIASES).forEach(function (field) {
+        var aliases = CFG.STT_COLUMN_ALIASES[field];
+        for (var i = 0; i < header.length; i++) {
+          if (aliases.indexOf(header[i]) !== -1) { colIndex[field] = i; break; }
         }
       });
+      return colIndex.sttId === undefined ? null : colIndex;
+    },
+
+    fromGrid: function (grid) {
+      if (!grid || grid.length < 2) {
+        throw new Error('The file must include a header row and at least one data row.');
+      }
+      var colIndex = this.detectColumns(grid[0]);
+      if (!colIndex) {
+        throw new Error('Could not find an STT ID / Account column in the header row.');
+      }
+      function pick(cells, idx) { return idx === undefined ? undefined : cells[idx]; }
+
+      var rows = [];
+      for (var r = 1; r < grid.length; r++) {
+        var cells = grid[r];
+        if (!cells || cells.every(function (c) { return String(c == null ? '' : c).trim() === ''; })) continue;
+        rows.push({
+          sttId: pick(cells, colIndex.sttId),
+          deposit: pick(cells, colIndex.deposit),
+          withdrawal: pick(cells, colIndex.withdrawal),
+          closedProfit: pick(cells, colIndex.closedProfit),
+          balance: pick(cells, colIndex.balance),
+          equity: pick(cells, colIndex.equity)
+        });
+      }
+      if (rows.length === 0) throw new Error('No data rows found below the header.');
+      return rows;
+    },
+
+    fromText: function (text) {
+      var lines = text.split(/\r\n|\r|\n/).filter(function (l) { return l.trim() !== ''; });
+      var delimiter = lines.length && lines[0].indexOf('\t') !== -1 ? '\t' : ',';
+      return this.fromGrid(lines.map(function (l) { return l.split(delimiter); }));
+    },
+
+    fromFile: function (file) {
+      var self = this;
+      var name = file.name.toLowerCase();
+      if (/\.(xlsx|xls)$/.test(name)) {
+        if (typeof XLSX === 'undefined') {
+          return Promise.reject(new Error(
+            'The Excel reader could not be loaded. Export the file as CSV and upload that instead.'));
+        }
+        return file.arrayBuffer().then(function (buf) {
+          var workbook = XLSX.read(buf, { type: 'array' });
+          var sheet = workbook.Sheets[workbook.SheetNames[0]];
+          var grid = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: '' });
+          return self.fromGrid(grid);
+        });
+      }
+      return file.text().then(function (text) { return self.fromText(text); });
     }
   };
 
-  function showHome() {
-    resetMonthGrid();
-    Recent.render();
-    return Scenes.show('step-home').then(function () {
-      if (!Store.isOnboarded()) Modal.open('onboardModal');
+  // =======================================================================
+  // Status player: types each message line, holds with a pulsing ellipsis
+  // on the last line until the real work settles, then types the final
+  // line ("Done." by default) - or the error message if the work failed.
+  // =======================================================================
+  var TYPE_SPEED = 14;
+  var LINE_PAUSE = 240;
+
+  function typeLine(container, text, className) {
+    return new Promise(function (resolve) {
+      var line = document.createElement('div');
+      line.className = 'status-line' + (className ? ' ' + className : '');
+      container.appendChild(line);
+      var i = 0;
+      (function tick() {
+        i++;
+        line.textContent = text.slice(0, i);
+        if (i < text.length) {
+          setTimeout(tick, TYPE_SPEED);
+        } else {
+          line.classList.add('done');
+          setTimeout(resolve, LINE_PAUSE);
+        }
+      })();
     });
   }
 
-  // =======================================================================
-  // Stage tracker: each processing stage animates from pending to active
-  // to "✓ Completed". The final stage holds until the real backend call
-  // settles; if the call finishes early the remaining stages fast-forward.
-  // =======================================================================
-  var Stages = {
-    play: function (names, work) {
-      var list = $('stageList');
-      list.innerHTML = names.map(function (n) {
-        return '<li class="stage-item"><span class="stage-name">' + escapeHtml(n) +
-          '</span><span class="stage-state"></span></li>';
-      }).join('');
-      var items = list.children;
+  function playStatus(container, lines, work, finalLine) {
+    container.innerHTML = '';
+    var settled = false, value, failure;
+    var tracked = (work || Promise.resolve()).then(
+      function (v) { settled = true; value = v; },
+      function (e) { settled = true; failure = e; }
+    );
 
-      function setState(i, cls, text) {
-        items[i].className = 'stage-item ' + cls;
-        items[i].lastElementChild.textContent = text;
-      }
+    var chain = Promise.resolve();
+    lines.forEach(function (l) {
+      chain = chain.then(function () { return typeLine(container, l); });
+    });
 
-      var settled = false, value, failure;
-      var tracked = (work || Promise.resolve()).then(
-        function (v) { settled = true; value = v; },
-        function (e) { settled = true; failure = e; }
-      );
-
-      var chain = Promise.resolve();
-      names.forEach(function (_, i) {
-        chain = chain.then(function () {
-          if (failure) return null;
-          setState(i, 'active', 'Processing…');
-          var isLast = i === names.length - 1;
-          var wait = isLast ? tracked : delay(settled || REDUCED_MOTION ? 150 : 620);
-          return wait.then(function () {
-            if (failure) { setState(i, 'failed', '✕ Failed'); return; }
-            setState(i, 'done', '✓ Completed');
-          });
+    return chain
+      .then(function () {
+        if (settled) return null;
+        var last = container.lastElementChild;
+        var base = last ? last.textContent.replace(/\.+$/, '') : '';
+        var dots = 3;
+        var pulse = setInterval(function () {
+          if (!last) return;
+          dots = (dots % 3) + 1;
+          last.textContent = base + '...'.slice(0, dots);
+        }, 380);
+        return tracked.then(function () {
+          clearInterval(pulse);
+          if (last) last.textContent = base + '...';
         });
+      })
+      .then(function () {
+        if (failure) {
+          return typeLine(container, failure.message || String(failure), 'error')
+            .then(function () { throw failure; });
+        }
+        return typeLine(container, finalLine || 'Done.').then(function () { return value; });
       });
+  }
 
-      return chain
-        .then(function () { return tracked; })
-        .then(function () {
-          if (failure) return delay(REDUCED_MOTION ? 100 : 600).then(function () { throw failure; });
-          return delay(REDUCED_MOTION ? 150 : 550).then(function () { return value; });
-        });
+  // =======================================================================
+  // Step controller: exactly one step visible at a time.
+  // =======================================================================
+  var Steps = {
+    ids: ['step-key', 'step-upload', 'step-upload-progress', 'step-refresh', 'step-month',
+      'step-generate', 'step-complete', 'step-next', 'step-done'],
+    show: function (id) {
+      this.ids.forEach(function (stepId) {
+        var step = $(stepId);
+        if (step) step.classList.toggle('visible', stepId === id);
+      });
     }
   };
 
   // =======================================================================
-  // Recent reports (localStorage only).
+  // Activity log (footer)
   // =======================================================================
-  var Recent = {
-    load: function () {
-      try { return JSON.parse(localStorage.getItem(CFG.STORAGE_KEYS.RECENT_REPORTS)) || []; }
-      catch (e) { return []; }
-    },
-
-    add: function (entry) {
-      var list = this.load().filter(function (r) { return r.label !== entry.label; });
-      list.unshift(entry);
-      if (list.length > 6) list = list.slice(0, 6);
-      localStorage.setItem(CFG.STORAGE_KEYS.RECENT_REPORTS, JSON.stringify(list));
-    },
-
-    relativeTime: function (iso) {
-      var then = new Date(iso);
-      if (isNaN(then.getTime())) return '';
-      var startOfDay = function (d) {
-        return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-      };
-      var days = Math.round((startOfDay(new Date()) - startOfDay(then)) / 86400000);
-      if (days <= 0) return 'Today';
-      if (days === 1) return 'Yesterday';
-      if (days < 7) return days + ' days ago';
-      if (days < 14) return 'Last Week';
-      return then.toLocaleDateString();
-    },
-
+  var ActivityLog = {
     render: function () {
-      var section = $('recentSection');
-      var list = this.load();
-      if (!list.length) { section.classList.add('hidden'); return; }
-      section.classList.remove('hidden');
-      var self = this;
-      var ul = $('recentList');
-      ul.innerHTML = '';
-      list.forEach(function (r) {
-        var li = document.createElement('li');
-        li.className = 'recent-item';
-        li.tabIndex = 0;
-        li.setAttribute('role', 'link');
-        li.setAttribute('aria-label', 'Open ' + r.label + ' Performance Summary');
-        li.innerHTML =
-          '<span class="recent-month">' + escapeHtml(r.label) + '</span>' +
-          '<span class="recent-status">Completed</span>' +
-          '<span class="recent-when">' + escapeHtml(self.relativeTime(r.when)) + '</span>';
-        function openIt() { if (r.url) window.open(r.url, '_blank', 'noopener'); }
-        li.addEventListener('click', openIt);
-        li.addEventListener('keydown', function (e) {
-          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openIt(); }
-        });
-        ul.appendChild(li);
-      });
+      var a = Store.getActivity();
+      var actUpload = $('actUpload');
+      var actRefresh = $('actRefresh');
+      var actGenerate = $('actGenerate');
+      var actArchive = $('actArchive');
+      var actStatus = $('actStatus');
+      var actErrors = $('actErrors');
+      if (actUpload) actUpload.textContent = a.lastUpload || '—';
+      if (actRefresh) actRefresh.textContent = a.lastRefresh || '—';
+      if (actGenerate) actGenerate.textContent = a.lastGenerate || '—';
+      if (actArchive) actArchive.textContent = a.lastArchive || '—';
+      if (actStatus) actStatus.textContent = a.status || 'Idle';
+      if (actErrors) actErrors.textContent = a.lastErrors != null ? String(a.lastErrors) : '—';
     }
   };
 
   // =======================================================================
-  // App state + error recovery.
+  // App state
   // =======================================================================
   var state = {
+    rows: [],
     monthKey: '',
     monthName: '',
     monthLabel: '',
     result: null
   };
 
-  var retryFn = null;
-  var resumeAfterKey = null;
-  var generating = false;
-
-  var NO_DATA_RE = /has no data|no data rows|was not found/i;
-
-  function fail(err, retry) {
-    var msg = err && err.message ? err.message : String(err);
-    if (NO_DATA_RE.test(msg)) {
-      retryFn = retry || null;
-      Scenes.show('step-empty');
-      return;
-    }
-    retryFn = retry || null;
-    $('errorMessage').textContent = msg;
-    $('btnRetry').classList.toggle('hidden', !retryFn);
-    Scenes.show('step-error');
-  }
-
-  function initError() {
-    $('btnRetry').addEventListener('click', function () {
-      var fn = retryFn;
-      retryFn = null;
-      if (fn) fn();
-    });
-    $('btnBackHome').addEventListener('click', function () {
-      retryFn = null;
-      showHome();
-    });
-    $('connectionLink').addEventListener('click', function () {
-      resumeAfterKey = retryFn;
-      $('accessKeyInput').value = Store.getKey();
-      $('keyStatus').textContent = '';
-      Scenes.show('step-key');
-    });
-
-    // Empty state
-    $('btnOpenGuideEmpty').addEventListener('click', function () { Modal.open('guideModal'); });
-    $('btnEmptyBack').addEventListener('click', function () {
-      retryFn = null;
-      showHome();
-    });
-  }
-
   // =======================================================================
-  // Access key (verification logic unchanged: ping, rollback on failure)
+  // Access key step
   // =======================================================================
   function initKey() {
-    var input = $('accessKeyInput');
-
-    function submit() {
-      var key = input.value.trim();
-      var status = $('keyStatus');
-      if (!key) { status.textContent = 'Enter the access key to continue.'; return; }
-      var previous = Store.getKey();
-      Store.setKey(key);
-      status.textContent = 'Verifying…';
-      Api.get('ping').then(function () {
-        status.textContent = '';
-        var resume = resumeAfterKey;
-        resumeAfterKey = null;
-        if (resume) { retryFn = null; resume(); }
-        else showHome();
-      }).catch(function (err) {
-        Store.setKey(previous);
-        status.textContent = 'Connection failed: ' + err.message;
+    var saveKeyBtn = $('btnSaveKey');
+    if (saveKeyBtn) {
+      saveKeyBtn.addEventListener('click', function () {
+        var key = $('accessKeyInput').value.trim();
+        var status = $('keyStatus');
+        if (!key) { status.textContent = 'Enter the access key to continue.'; return; }
+        var previous = Store.getKey();
+        Store.setKey(key);
+        status.textContent = 'Verifying...';
+        Api.get('ping').then(function () {
+          status.textContent = '';
+          Steps.show('step-upload');
+        }).catch(function (err) {
+          Store.setKey(previous);
+          status.textContent = 'Connection failed: ' + err.message;
+        });
       });
     }
 
-    $('btnSaveKey').addEventListener('click', submit);
-    input.addEventListener('keydown', function (e) {
-      if (e.key === 'Enter') { e.preventDefault(); submit(); }
-    });
-  }
-
-  // =======================================================================
-  // Month selection. The year is detected from the system clock; selecting
-  // a month starts processing immediately - no extra clicks.
-  // =======================================================================
-  function initMonths() {
-    var grid = $('monthGrid');
-    var year = new Date().getFullYear();
-
-    $('yearHint').textContent = 'Reports generate for ' + year + '. The year is detected automatically.';
-
-    CFG.MONTH_NAMES.forEach(function (name, i) {
-      var btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'month-btn';
-      btn.textContent = name;
-      btn.addEventListener('click', function () {
-        if (generating) return;
-        state.monthName = name;
-        state.monthLabel = name + ' ' + year;
-        state.monthKey = year + '-' + String(i + 1).padStart(2, '0');
-        btn.classList.add('selected');
-        setMonthGridEnabled(false);
-        startGenerate();
+    var connectionLink = $('connectionLink');
+    if (connectionLink) {
+      connectionLink.addEventListener('click', function (e) {
+        e.preventDefault();
+        $('accessKeyInput').value = Store.getKey();
+        $('keyStatus').textContent = '';
+        Steps.show('step-key');
       });
-      grid.appendChild(btn);
+    }
+  }
+
+  // =======================================================================
+  // Step 1: Upload
+  // =======================================================================
+  function initUpload() {
+    var dropzone = $('dropzone');
+    var input = $('fileInput');
+
+    dropzone.addEventListener('click', function () { input.click(); });
+    dropzone.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); input.click(); }
+    });
+    input.addEventListener('change', function () {
+      if (input.files.length) {
+        beginUpload(TableData.fromFile(input.files[0]), input.files[0].name);
+        input.value = '';
+      }
+    });
+
+    ['dragover', 'dragenter'].forEach(function (ev) {
+      dropzone.addEventListener(ev, function (e) { e.preventDefault(); dropzone.classList.add('drag'); });
+    });
+    ['dragleave', 'drop'].forEach(function (ev) {
+      dropzone.addEventListener(ev, function (e) { e.preventDefault(); dropzone.classList.remove('drag'); });
+    });
+    dropzone.addEventListener('drop', function (e) {
+      var file = e.dataTransfer.files && e.dataTransfer.files[0];
+      if (file) beginUpload(TableData.fromFile(file), file.name);
+    });
+
+    document.addEventListener('paste', function (e) {
+      if (!$('step-upload').classList.contains('visible')) return;
+      var text = e.clipboardData && e.clipboardData.getData('text');
+      if (text && text.trim()) {
+        beginUpload(
+          Promise.resolve().then(function () { return TableData.fromText(text); }),
+          'Pasted table'
+        );
+      }
     });
   }
 
-  function setMonthGridEnabled(enabled) {
-    var buttons = $('monthGrid').querySelectorAll('.month-btn');
-    for (var i = 0; i < buttons.length; i++) buttons[i].disabled = !enabled;
-  }
+  function beginUpload(parsePromise, sourceName) {
+    Steps.show('step-upload-progress');
+    Store.patchActivity({ status: 'Validating upload' });
 
-  function resetMonthGrid() {
-    var buttons = $('monthGrid').querySelectorAll('.month-btn');
-    for (var i = 0; i < buttons.length; i++) buttons[i].classList.remove('selected');
-    setMonthGridEnabled(true);
+    playStatus($('uploadStatus'), [
+      '✓ File uploaded successfully.',
+      'Analyzing workbook...',
+      'Checking worksheet structure...',
+      'Validating sheets...'
+    ], parsePromise, 'Workbook verified.')
+      .then(function (rows) {
+        state.rows = rows;
+        Store.patchActivity({ lastUpload: sourceName + ' · ' + now(), status: 'Idle' });
+        return delay(900);
+      })
+      .then(function () { Steps.show('step-refresh'); })
+      .catch(function () {
+        Store.patchActivity({ status: 'Upload failed' });
+        return delay(2400).then(function () { Steps.show('step-upload'); });
+      });
   }
 
   // =======================================================================
-  // Generation: one backend call; the stage tracker narrates it live.
+  // Step 2: Refresh workbook
   // =======================================================================
-  function startGenerate() {
-    if (generating) return;
-    generating = true;
-    Store.patchActivity({ status: 'Generating report' });
-    $('processingTitle').textContent = 'Generating ' + state.monthLabel + ' Performance Summary';
+  function initRefresh() {
+    $('btnRefresh').addEventListener('click', function () {
+      var btn = this;
+      btn.disabled = true;
+      Store.patchActivity({ status: 'Refreshing workbook' });
 
-    var startedAt = Date.now();
+      playStatus($('refreshStatus'), [
+        'Refreshing Pivot Tables...',
+        'Refreshing formulas...',
+        'Updating references...',
+        'Checking calculations...',
+        'Finalizing...'
+      ], Api.post('refreshWorkbook', {}))
+        .then(function (data) {
+          var line = $('lastRefreshLine');
+          line.textContent = 'Last Refresh · ' + data.refreshedDate + ' · ' + data.refreshedTime;
+          line.classList.remove('hidden');
+          Store.patchActivity({
+            lastRefresh: data.refreshedDate + ' ' + data.refreshedTime,
+            status: 'Idle'
+          });
+          return delay(1100);
+        })
+        .then(function () { Steps.show('step-month'); })
+        .catch(function () {
+          Store.patchActivity({ status: 'Refresh failed' });
+          btn.disabled = false;
+        });
+    });
+  }
 
-    Scenes.show('step-processing').then(function () {
-      Stages.play([
-        'Reading Client Database',
-        'Reading Trade History',
-        'Validating Records',
-        'Calculating Growth',
-        'Generating Summary',
-        'Creating Spreadsheet',
-        'Uploading to Google Drive'
+  // =======================================================================
+  // Step 3: Reporting period
+  // =======================================================================
+  function initMonth() {
+    var monthSelect = $('monthSelect');
+    var yearSelect = $('yearSelect');
+    var today = new Date();
+
+    monthSelect.innerHTML = CFG.MONTH_NAMES.map(function (name, i) {
+      return '<option value="' + i + '">' + name + '</option>';
+    }).join('');
+    monthSelect.value = String(today.getMonth());
+
+    var years = [];
+    for (var y = today.getFullYear() - CFG.YEAR_RANGE.back; y <= today.getFullYear() + CFG.YEAR_RANGE.forward; y++) {
+      years.push(y);
+    }
+    yearSelect.innerHTML = years.map(function (yr) {
+      return '<option value="' + yr + '">' + yr + '</option>';
+    }).join('');
+    yearSelect.value = String(today.getFullYear());
+
+    $('btnContinueMonth').addEventListener('click', function () {
+      var monthIndex = parseInt(monthSelect.value, 10);
+      var year = parseInt(yearSelect.value, 10);
+      state.monthName = CFG.MONTH_NAMES[monthIndex];
+      state.monthLabel = state.monthName + ' ' + year;
+      state.monthKey = year + '-' + String(monthIndex + 1).padStart(2, '0');
+      $('generatePeriod').textContent = state.monthLabel;
+      Steps.show('step-generate');
+    });
+  }
+
+  // =======================================================================
+  // Step 4: Generate report
+  // =======================================================================
+  function initGenerate() {
+    $('btnGenerateReport').addEventListener('click', function () {
+      var btn = this;
+      btn.disabled = true;
+      Store.patchActivity({ status: 'Generating report' });
+
+      playStatus($('generateStatus'), [
+        'Reading spreadsheet...',
+        'Loading client data...',
+        'Calculating Monthly Performance...',
+        'Generating Notes...',
+        'Refreshing Pivot Tables...',
+        'Applying formatting...',
+        'Hiding internal columns...',
+        'Saving workbook...'
       ], Api.post('generateReports', {
         monthKey: state.monthKey,
-        monthLabel: state.monthLabel
+        monthLabel: state.monthLabel,
+        rows: state.rows
       }))
         .then(function (data) {
           state.result = data;
-          var seconds = (Date.now() - startedAt) / 1000;
-          populateSuccess(data, seconds);
-          Recent.add({
-            label: state.monthLabel,
-            url: data.outputFile && data.outputFile.url,
-            when: new Date().toISOString()
-          });
+          $('figSuccess').textContent = data.counts.matchedAccounts;
+          $('figErrors').textContent = data.counts.errorCount;
+          renderErrors(data.errors || []);
           Store.patchActivity({
             lastGenerate: state.monthLabel + ' · ' + now(),
             lastErrors: data.counts.errorCount,
             status: 'Idle'
           });
-          generating = false;
-          return Scenes.show('step-complete');
+          return delay(900);
         })
-        .catch(function (err) {
-          generating = false;
+        .then(function () { Steps.show('step-complete'); })
+        .catch(function () {
           Store.patchActivity({ status: 'Generation failed' });
-          fail(err, startGenerate);
+          btn.disabled = false;
         });
     });
   }
 
-  function populateSuccess(data, seconds) {
-    var counts = data.counts || {};
-    var stats = data.stats || null;
-    var total = counts.totalAccounts || 0;
-    var matched = counts.matchedAccounts || 0;
-
-    $('reportName').textContent = (data.outputFile && data.outputFile.name) ||
-      (state.monthLabel + ' Performance Summary');
-
-    $('statClients').textContent = String(total);
-    $('figSuccess').textContent = String(matched);
-    $('figErrors').textContent = String(counts.errorCount || 0);
-    $('statRate').textContent = total > 0 ? Math.round((matched / total) * 100) + '%' : '—';
-    $('statAvg').textContent = stats ? stats.averageGrowth.toFixed(2) + '%' : '—';
-    $('statHigh').textContent = stats ? stats.highestGrowth.toFixed(2) + '%' : '—';
-    $('statLow').textContent = stats ? stats.lowestGrowth.toFixed(2) + '%' : '—';
-    $('statTime').textContent = seconds.toFixed(1) + 's';
-
-    renderErrors(data.errors || []);
-    renderErrorPreview(data.errors || []);
-  }
-
-  // Full errors table (inside the errors modal).
   function renderErrors(errors) {
     var body = $('errorsTableBody');
     if (!errors.length) {
@@ -524,42 +474,17 @@
     }).join('');
   }
 
-  // Short preview on the success screen: client name + reason only.
-  function renderErrorPreview(errors) {
-    var section = $('errorPreview');
-    if (!errors.length) { section.classList.add('hidden'); return; }
-    section.classList.remove('hidden');
-    var list = $('errorPreviewList');
-    list.innerHTML = errors.slice(0, 5).map(function (e) {
-      var name = e.clientName && e.clientName !== 'Unknown'
-        ? e.clientName
-        : (e.sttId || 'Unknown');
-      return '<li class="preview-item">' +
-        '<span class="preview-name">' + escapeHtml(name) + '</span>' +
-        '<span class="preview-reason">' + escapeHtml(e.issue) + '</span>' +
-        '</li>';
-    }).join('');
-    $('btnViewFullErrors').textContent = errors.length > 5
-      ? 'View Full Errors (' + errors.length + ')'
-      : 'View Full Errors';
-  }
-
   // =======================================================================
-  // Success screen actions.
+  // Completion screen
   // =======================================================================
   function initComplete() {
     $('btnOpenSheet').addEventListener('click', function () {
-      var url = (state.result && state.result.outputFile && state.result.outputFile.url) ||
-        CFG.SPREADSHEET_URL;
-      window.open(url, '_blank', 'noopener');
+      window.open(CFG.SPREADSHEET_URL, '_blank', 'noopener');
     });
 
-    $('btnOpenFolder').addEventListener('click', function () {
-      var url = (state.result && state.result.folderUrl) || CFG.OUTPUT_FOLDER_URL;
-      window.open(url, '_blank', 'noopener');
+    $('btnViewErrors').addEventListener('click', function () {
+      $('errorsPanel').classList.toggle('hidden');
     });
-
-    $('btnViewFullErrors').addEventListener('click', function () { Modal.open('errorsModal'); });
 
     $('btnCopyNotes').addEventListener('click', function () {
       var btn = this;
@@ -572,7 +497,7 @@
       );
     });
 
-    $('btnAnotherMonth').addEventListener('click', function () { showHome(); });
+    $('btnToNext').addEventListener('click', function () { Steps.show('step-next'); });
   }
 
   function flashLabel(button, message) {
@@ -582,22 +507,71 @@
   }
 
   // =======================================================================
-  // Init: hold the boot beam briefly, then land on the first scene.
+  // Step 5: Prepare next month
+  // =======================================================================
+  function initNext() {
+    $('btnPrepareNext').addEventListener('click', function () {
+      var btn = this;
+      btn.disabled = true;
+      Store.patchActivity({ status: 'Archiving' });
+
+      playStatus($('archiveStatus'), [
+        'Creating archive...',
+        'Saving Monthly Performance - ' + state.monthLabel,
+        'Uploading archive...',
+        'Clearing report data...',
+        'Keeping formulas...',
+        'Keeping Pivot Tables...',
+        'Keeping formatting...',
+        'Preparing template...'
+      ], Api.post('prepareNextMonth', { monthLabel: state.monthLabel }))
+        .then(function (data) {
+          Store.patchActivity({
+            lastArchive: data.archiveFileName + ' · ' + now(),
+            status: 'Idle'
+          });
+          $('doneMessage').textContent = 'The workbook has been archived as "' + data.archiveFileName +
+            '" and is ready for the next reporting month.';
+          return delay(900);
+        })
+        .then(function () { Steps.show('step-done'); })
+        .catch(function () {
+          Store.patchActivity({ status: 'Archive failed' });
+          btn.disabled = false;
+        });
+    });
+
+    $('btnStartOver').addEventListener('click', function () { window.location.reload(); });
+  }
+
+  // =======================================================================
+  // Init
   // =======================================================================
   document.addEventListener('DOMContentLoaded', function () {
-    initModals();
-    initHeader();
     initKey();
-    initMonths();
+    initUpload();
+    initRefresh();
+    initMonth();
+    initGenerate();
     initComplete();
-    initError();
+    initNext();
+    ActivityLog.render();
 
-    delay(REDUCED_MOTION ? 250 : 1600).then(function () {
-      $('loader').classList.add('done');
-      return delay(REDUCED_MOTION ? 0 : 350);
-    }).then(function () {
-      if (Store.getKey()) showHome();
-      else Scenes.show('step-key');
-    });
+    var savedKey = Store.getKey();
+    if (savedKey) {
+      $('accessKeyInput').value = savedKey;
+      var status = $('keyStatus');
+      status.textContent = 'Checking saved connection...';
+      Api.get('ping').then(function () {
+        status.textContent = '';
+        Steps.show('step-upload');
+      }).catch(function () {
+        status.textContent = 'Saved connection is invalid. Please enter the access key again.';
+        Steps.show('step-key');
+      });
+      return;
+    }
+
+    Steps.show('step-key');
   });
 })();
