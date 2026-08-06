@@ -24,6 +24,8 @@ var ERROR_HEADERS_ = ['Client Name', 'Account Number', 'Software', 'Error Type',
 
 /** Returns the main workbook (Client Database / Raw Data). */
 function getSpreadsheet_() {
+  var active = SpreadsheetApp.getActiveSpreadsheet();
+  if (active && active.getId() === SPREADSHEET_ID) return active;
   return SpreadsheetApp.openById(SPREADSHEET_ID);
 }
 
@@ -202,9 +204,13 @@ function writeOutputToMainWorkbook_(spreadsheet, monthLabel, summaryRows, errorR
  * or an empty string when the parent folder cannot be determined.
  */
 function getSpreadsheetFolderUrl_(spreadsheet) {
-  var file = DriveApp.getFileById(spreadsheet.getId());
-  var parents = file.getParents();
-  return parents.hasNext() ? parents.next().getUrl() : '';
+  try {
+    var file = DriveApp.getFileById(spreadsheet.getId());
+    var parents = file.getParents();
+    return parents.hasNext() ? parents.next().getUrl() : '';
+  } catch (err) {
+    return '';
+  }
 }
 
 /**

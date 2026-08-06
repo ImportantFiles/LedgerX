@@ -8,7 +8,7 @@
 window.LEDGERX_CONFIG = {
   // Paste the /exec URL from your Apps Script deployment here.
   // See SETUP.md, step "Deploy the Web App".
-APPS_SCRIPT_URL: 'https://script.google.com/macros/s/AKfycbxVlv9MTKAn63NMHKk1YUXJJ_HXyKtL6Q8OR9ixUY9hgOjo1Tr2fw_bUWTv7BZPspatvA/exec',
+APPS_SCRIPT_URL: 'https://script.google.com/macros/s/AKfycbw2AefGzifEBJlhlX8mp6T0MKkjiRRUhK2ewX-0y7F3swwG9aAfCcuf_jDhFKroOb3x/exec',
   // The main workbook (Client Database / Raw Data / Errors).
   SPREADSHEET_URL: 'https://docs.google.com/spreadsheets/d/1C2NX5ImumLfOxyopBHr_xOvwSOQod7bf8yzRTJHX_Yo/edit',
   // Fallback folder used by the "Open Output Folder" button when the
