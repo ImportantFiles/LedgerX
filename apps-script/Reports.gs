@@ -182,9 +182,18 @@ function generateReports_(payload) {
 
   var counts = { total: 0, matched: 0, unknown: 0, zeroBalance: 0, errors: 0 };
 
-  sttRows.forEach(function (row) {
+  sttRows.forEach(function (row, index) {
     counts.total++;
-    var result = evaluateSttRow_(row, clientDb, seenIds, noteMonth);
+    if (!row || typeof row !== 'object') {
+      throw new Error('Invalid row data at Raw Data row ' + (index + 1) + '. Expected a table row object.');
+    }
+
+    var result;
+    try {
+      result = evaluateSttRow_(row, clientDb, seenIds, noteMonth);
+    } catch (err) {
+      throw new Error('Validation failed on Raw Data row ' + (index + 1) + ': ' + (err && err.message ? err.message : String(err)));
+    }
 
     if (result.isDuplicate) {
       counts.errors += result.issues.length;

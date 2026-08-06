@@ -116,12 +116,12 @@ function extractSttId_(value) {
  * because the STT export names its closed-profit column simply "Profit".
  */
 var STT_IMPORT_ALIASES_ = {
-  sttId: ['stt id', 'account', 'account id', 'account number', 'stt', 'login'],
-  deposit: ['total deposit', 'deposit', 'deposits'],
-  withdrawal: ['total withdrawal', 'withdrawal', 'withdrawals'],
-  closedProfit: ['closed profit', 'closed p/l', 'closed pl', 'profit'],
-  balance: ['balance'],
-  equity: ['equity']
+  sttId: ['stt id', 'account', 'account id', 'account number', 'account #', 'acct', 'login'],
+  deposit: ['total deposit', 'total deposits', 'deposit', 'deposits', 'net deposit', 'net deposits'],
+  withdrawal: ['total withdrawal', 'total withdrawals', 'withdrawal', 'withdrawals'],
+  closedProfit: ['closed profit', 'closed p/l', 'closed pl', 'profit', 'closed pnl', 'closed p&l'],
+  balance: ['balance', 'ending balance', 'current balance'],
+  equity: ['equity', 'net equity']
 };
 
 /**

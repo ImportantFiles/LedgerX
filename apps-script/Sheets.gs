@@ -126,7 +126,7 @@ function readRawData_(spreadsheet) {
 
   var colIndex = null;
   var headerRow = -1;
-  for (var r = 0; r < Math.min(values.length, 10); r++) {
+  for (var r = 0; r < Math.min(values.length, 20); r++) {
     colIndex = detectSttColumns_(values[r]);
     if (colIndex) { headerRow = r; break; }
   }
