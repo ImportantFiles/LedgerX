@@ -34,20 +34,17 @@ It must contain **exactly two permanent tabs**. Nothing is ever generated into i
    ignored. LedgerX always recalculates growth itself.
 
 3. **Delete everything else.** `Errors`, `Generated Summary`, and any
-   `Generated Report - *` tabs are obsolete - reports and error logs now live
-   only in the generated output file.
+   `Generated Report - *` tabs are stale; the current workflow writes output
+   to the template workbook's `Generated Summary` and `Errors` sheets.
 
-## Part 2 - Output folder
+## Part 2 - Template workbook location
 
-Every generation creates (or rewrites) `{Month} {Year} Performance Summary` in
-this Drive folder:
+Every generation now writes output directly into the template workbook
+itself instead of creating a separate file.
 
-`https://drive.google.com/drive/folders/1tkZxSgzWrjv2Ot-zV7J6pAZ4pIEJ3oRi`
-
-The file contains two sheets: **Performance Summary** and **Errors**.
 The Google account that deploys the Apps Script must have **edit access** to
-this folder. To change the destination, update `OUTPUT_FOLDER_ID` in
-`apps-script/Sheets.gs` and `OUTPUT_FOLDER_URL` in `config.js`.
+this workbook. If the workbook is stored inside a Drive folder, the frontend's
+folder action will open that parent folder.
 
 ## Part 3 - Deploy the Apps Script backend
 
@@ -68,7 +65,7 @@ this folder. To change the destination, update `OUTPUT_FOLDER_ID` in
 ## Part 4 - Configure and publish the frontend
 
 1. In `config.js`, set `APPS_SCRIPT_URL` to your `/exec` URL. `OUTPUT_FOLDER_URL`
-   is already set to the output folder.
+   is kept only as a fallback for the Open Output Folder button.
 2. Push `TradingReportGenerator/` to a GitHub repo and enable GitHub Pages.
 3. Open the site, enter the `API_SECRET_KEY` value when asked. The key is
    stored only in that browser; "Connection settings" on the error screen
@@ -82,9 +79,9 @@ this folder. To change the destination, update `OUTPUT_FOLDER_ID` in
    export into `Raw Data` (see the in-app **Guide**).
 2. Open LedgerX and click the reporting month - the year is automatic, and
    processing starts immediately.
-3. LedgerX reads the template, validates, calculates, and writes
-   `{Month} {Year} Performance Summary` (Performance Summary + Errors) into the
-   output folder. Re-running a month rewrites the same file.
+4. LedgerX reads the template, validates, calculates, and writes the
+   `Generated Summary` and `Errors` sheets into the same template workbook.
+   Re-running a month rewrites the same sheets.
 4. From the success screen: **Open Report**, **Copy Notes** (paste into GHL),
    **Open Output Folder**, or **Generate Another Report**.
 
@@ -101,7 +98,8 @@ this folder. To change the destination, update `OUTPUT_FOLDER_ID` in
 - **Every account shows "Missing Balance; Missing Deposit; Missing Equity".**
   What's in `Raw Data` isn't the Monthly Performance table. Paste the export
   itself.
-- **Output file creation fails.** The deploying account lacks access to the
-  output Drive folder - share the folder with it (edit rights).
+- **Output write fails.** The deploying account lacks edit access to the
+  template workbook - share the workbook with the deployer or deploy it from
+  the correct account.
 - **Growth stat cards show "—".** The deployed backend is older than the
   frontend - publish a new deployment version with the latest `.gs` files.

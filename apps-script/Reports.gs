@@ -152,13 +152,11 @@ function buildUnknownNote_(monthLabel, issues) {
  * workbook's "Raw Data" sheet (a payload that still carries pre-parsed
  * rows keeps working for backward compatibility), reads the Client
  * Database fresh, classifies every row, then writes the consolidated
- * report (grouped by AM, Unknown group last) into a NEW spreadsheet -
- * "{Month} {Year} Performance Summary" in the designated Drive folder -
- * containing a Performance Summary sheet and an Errors sheet. The main
- * workbook itself only receives the Errors log and updated Client
- * Database notes; the summary never lives in the main workbook. Notes
- * use the month name alone (e.g. "July: ...") while the Last Updated
- * stamp uses the full "{Month} {Year}" label.
+ * report (grouped by AM, Unknown group last) into the main workbook's
+ * "Generated Summary" sheet and its "Errors" sheet. The main workbook
+ * retains the Client Database, Raw Data, Errors, and Generated Summary
+ * sheets. Notes use the month name alone (e.g. "July: ...") while the
+ * Last Updated stamp uses the full "{Month} {Year}" label.
  */
 function generateReports_(payload) {
   if (!payload) {
@@ -250,10 +248,8 @@ function generateReports_(payload) {
   });
   var summaryRows = entries.map(function (e) { return e.row; });
 
-  // The report AND the error log live in the output spreadsheet in the
-  // Drive folder; the main workbook (Client Database + Raw Data only) is
-  // never written to except for Client Database notes.
-  var outputFile = writeOutputFile_(monthLabel, summaryRows, errorRows);
+  // The report and the error log are written into the main workbook.
+  var outputFile = writeOutputToMainWorkbook_(spreadsheet, monthLabel, summaryRows, errorRows);
 
   writeClientNotes_(clientDb, noteUpdates);
 

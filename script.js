@@ -9,9 +9,9 @@
  *
  * Business logic is untouched: same Apps Script endpoints, same payload
  * shapes, same auth. The backend reads the template's Raw Data sheet,
- * matches the Client Database, and writes "{Month} {Year} Performance
- * Summary" into the designated Drive folder. The year is always the
- * current system year. No uploads, no confirmations.
+ * matches the Client Database, and writes Generated Summary and Errors
+ * into the template workbook. The year is always the current system year.
+ * No uploads, no confirmations.
  */
 (function () {
   'use strict';

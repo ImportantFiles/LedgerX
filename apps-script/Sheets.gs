@@ -3,13 +3,10 @@
  * Low-level access to Google Sheets. Every read/write goes through this
  * file so batching and layout assumptions stay in one place.
  *
- * Two spreadsheets are involved:
+ * One spreadsheet is involved:
  *  - The MAIN workbook (SPREADSHEET_ID): exactly two permanent tabs -
- *    Client Database and Raw Data. Nothing is generated into it.
- *  - The OUTPUT file: "{Month} {Year} Performance Summary", created (or
- *    rewritten) by each generation inside the designated Drive folder
- *    (OUTPUT_FOLDER_ID), containing the Performance Summary sheet and
- *    the Errors sheet.
+ *    Client Database and Raw Data. Generated output is written into the
+ *    same workbook's Generated Summary and Errors sheets.
  */
 
 // ---- Workbook configuration -------------------------------------------
@@ -19,13 +16,8 @@ var RAW_DATA_SHEET_NAME = 'Raw Data';
 var LEGACY_RAW_DATA_SHEET_NAME = 'STT Import'; // accepted until the tab is renamed
 var ERRORS_SHEET_NAME = 'Errors';
 var REPORT_SHEET_PREFIX = 'Generated Report - ';
+var GENERATED_SUMMARY_SHEET_NAME = 'Generated Summary';
 var UNKNOWN_GROUP_LABEL = 'Unknown';
-
-// ---- Output configuration ----------------------------------------------
-// Every generated Performance Summary spreadsheet is saved to this Drive
-// folder and nowhere else.
-var OUTPUT_FOLDER_ID = '1tkZxSgzWrjv2Ot-zV7J6pAZ4pIEJ3oRi';
-var OUTPUT_SUMMARY_SHEET_NAME = 'Performance Summary';
 
 var REPORT_HEADERS_ = ['STT ID', 'Name', 'System', 'AM', 'Note'];
 var ERROR_HEADERS_ = ['Client Name', 'Account Number', 'Software', 'Error Type', 'Detailed Error Message', 'Timestamp'];
@@ -174,54 +166,45 @@ function readRawData_(spreadsheet) {
 }
 
 /**
- * Writes the generated report into its own output spreadsheet named
- * "{Month} {Year} Performance Summary", saved in the designated Drive
- * folder (OUTPUT_FOLDER_ID) - never anywhere else, and never inside the
- * main workbook. If a file with that name already exists in the folder,
- * it is rewritten in place (re-running a month updates the same file
- * instead of piling up copies). The file contains two sheets:
- * "Performance Summary" and "Errors".
+ * Writes the generated report into the main workbook's
+ * "Generated Summary" sheet and its "Errors" sheet. If either sheet is
+ * missing, it is created. Existing data rows are cleared before the new
+ * rows are written.
  * Returns { name, url, folderUrl } for the frontend's buttons.
  */
-function writeOutputFile_(monthLabel, summaryRows, errorRows) {
-  var folder = DriveApp.getFolderById(OUTPUT_FOLDER_ID);
-  var name = monthLabel + ' Performance Summary';
-
-  var existing = folder.getFilesByName(name);
-  var output;
-  if (existing.hasNext()) {
-    output = SpreadsheetApp.openById(existing.next().getId());
-  } else {
-    output = SpreadsheetApp.create(name);
-    DriveApp.getFileById(output.getId()).moveTo(folder);
-  }
-
-  // Sheet 1: Performance Summary. On a fresh file, rename the default
-  // first sheet instead of leaving an empty "Sheet1" behind.
-  var summarySheet = output.getSheetByName(OUTPUT_SUMMARY_SHEET_NAME);
+function writeOutputToMainWorkbook_(spreadsheet, monthLabel, summaryRows, errorRows) {
+  var summarySheet = spreadsheet.getSheetByName(GENERATED_SUMMARY_SHEET_NAME);
   if (!summarySheet) {
-    var sheets = output.getSheets();
-    if (sheets.length === 1 && sheets[0].getLastRow() === 0) {
-      summarySheet = sheets[0].setName(OUTPUT_SUMMARY_SHEET_NAME);
-    } else {
-      summarySheet = output.insertSheet(OUTPUT_SUMMARY_SHEET_NAME, 0);
-    }
+    summarySheet = spreadsheet.insertSheet(GENERATED_SUMMARY_SHEET_NAME);
   }
   summarySheet.getRange(1, 1, 1, REPORT_HEADERS_.length).setValues([REPORT_HEADERS_]);
   summarySheet.setFrozenRows(1);
   clearDataRows_(summarySheet);
   writeReportRows_(summarySheet, summaryRows);
 
-  // Sheet 2: Errors.
-  var errorsSheet = output.getSheetByName(ERRORS_SHEET_NAME);
+  var errorsSheet = spreadsheet.getSheetByName(ERRORS_SHEET_NAME);
   if (!errorsSheet) {
-    errorsSheet = output.insertSheet(ERRORS_SHEET_NAME);
+    errorsSheet = spreadsheet.insertSheet(ERRORS_SHEET_NAME);
     errorsSheet.setFrozenRows(1);
   }
   writeErrorRows_(errorsSheet, errorRows);
 
   SpreadsheetApp.flush();
-  return { name: name, url: output.getUrl(), folderUrl: folder.getUrl() };
+  return {
+    name: GENERATED_SUMMARY_SHEET_NAME,
+    url: spreadsheet.getUrl(),
+    folderUrl: getSpreadsheetFolderUrl_(spreadsheet)
+  };
+}
+
+/**
+ * Returns the URL of the folder containing the given spreadsheet,
+ * or an empty string when the parent folder cannot be determined.
+ */
+function getSpreadsheetFolderUrl_(spreadsheet) {
+  var file = DriveApp.getFileById(spreadsheet.getId());
+  var parents = file.getParents();
+  return parents.hasNext() ? parents.next().getUrl() : '';
 }
 
 /**

@@ -40,14 +40,14 @@ function prepareNextMonth_(payload) {
   // Clear only the live data rows - headers, formulas, protections, and
   // validation stay. Raw Data (or its legacy "STT Import" name) is
   // cleared so next month's paste starts on a clean sheet. Legacy Errors
-  // and per-AM report sheets, if any remain, are cleared too.
+  // and the Generated Summary sheet (if present) are also cleared.
   spreadsheet.getSheets().forEach(function (sheet) {
     if (sheet.getName().indexOf(REPORT_SHEET_PREFIX) === 0) {
       clearDataRows_(sheet);
     }
   });
 
-  [RAW_DATA_SHEET_NAME, LEGACY_RAW_DATA_SHEET_NAME, ERRORS_SHEET_NAME].forEach(function (name) {
+  [RAW_DATA_SHEET_NAME, LEGACY_RAW_DATA_SHEET_NAME, ERRORS_SHEET_NAME, GENERATED_SUMMARY_SHEET_NAME].forEach(function (name) {
     var sheet = spreadsheet.getSheetByName(name);
     if (sheet) clearDataRows_(sheet);
   });

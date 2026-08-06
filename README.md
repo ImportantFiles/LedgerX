@@ -2,9 +2,9 @@
 
 LedgerX turns a Monthly Performance (STT) export into a ready-to-send client
 report. It reads the LedgerX Template (Google Sheets), validates and calculates
-everything server-side, and creates a new "{Month} {Year} Performance Summary"
-spreadsheet in a designated Google Drive folder. It runs as a static site on
-GitHub Pages, backed by a Google Apps Script Web App.
+everything server-side, and writes the results back into the same template
+workbook. It runs as a static site on GitHub Pages, backed by a Google Apps
+Script Web App.
 
 The interface is a premium, minimal, one-screen-at-a-time experience: boot beam,
 month cards, a live stage tracker, and a stats-rich success screen. No uploads,
@@ -17,10 +17,9 @@ Update the LedgerX Template (paste Client Database + Raw Data)
         |
 Open LedgerX -> pick a month card -> automatic processing
         |
-"{Month} {Year} Performance Summary" created in the output Drive folder
-   (Sheet 1: Performance Summary, Sheet 2: Errors)
+Generated Summary and Errors are written into the template workbook
         |
-Success screen: stats, error preview, Open Report / Open Output Folder,
+Success screen: stats, error preview, Open Report / Open Containing Folder,
 Copy Notes (for GHL), Generate Another Report
 ```
 
@@ -32,24 +31,21 @@ server-side during generation - the browser never parses or uploads files.
 ```
 GitHub Pages (static)              Google Apps Script (Web App)         Google Drive
 ------------------------           ---------------------------          ------------------
-index.html / styles.css / -- fetch(JSON, text/plain) -->  Code.gs (doGet/doPost)  ---> MAIN TEMPLATE (never generated into):
+index.html / styles.css / -- fetch(JSON, text/plain) -->  Code.gs (doGet/doPost)  ---> MAIN TEMPLATE (reads + writes):
 script.js                                                  Reports.gs, Sheets.gs,        Client Database
                                                             Archive.gs, Utils.gs          Raw Data
                         <-- JSON response ------------------
-                                                                                          OUTPUT FOLDER (one file per month):
-                                                                                           {Month} {Year} Performance Summary
-                                                                                             - Performance Summary
-                                                                                             - Errors
+                                                                                          MAIN TEMPLATE:
+                                                                                           Generated Summary
+                                                                                           Errors
 ```
 
 - **Main template.** Exactly two permanent tabs: `Client Database` (who owns each
   STT ID: ID, Name, System, AM, Note) and `Raw Data` (the pasted Monthly
   Performance export; the legacy `STT Import` tab name is still accepted).
-  Nothing is ever generated into the main template.
-- **Output.** Every generation writes `{Month} {Year} Performance Summary` into
-  the designated Drive folder (`OUTPUT_FOLDER_ID` in `Sheets.gs`). Re-running the
-  same month rewrites the same file instead of creating copies. Errors live only
-  in this output file.
+  Generated output is written into the same template workbook.
+- **Output.** Every generation writes `Generated Summary` and `Errors` into the
+  template workbook. Re-running the same month rewrites the same sheets.
 - **Authentication.** Requests are authenticated with a shared secret key stored
   in Apps Script Script Properties (`API_SECRET_KEY`), entered once into the
   browser (localStorage).
@@ -107,7 +103,7 @@ TradingReportGenerator/
 - Negative numbers always render as `-$1,250.55`, never `($1,250.55)`.
 - **Notes** are one single sentence, ready to paste into GHL:
   `July: 6.42% growth, $1,842.55 closed profit, $325.20 floating P/L, $18,560.55 current balance.`
-- **Performance Summary** (in the output file) lists STT ID, Name, System, AM,
+- **Performance Summary** (in the `Generated Summary` sheet) lists STT ID, Name, System, AM,
   Note - grouped by AM alphabetically, Unknown group last, clients A-Z.
 - An account lands in the **Unknown** group and in the output file's **Errors**
   sheet whenever its STT ID is blank/unmatched/duplicated, or its Balance,
