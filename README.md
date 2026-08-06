@@ -1,108 +1,123 @@
-# LedgerX
+# LedgerX v2.0
 
-LedgerX turns a Monthly Performance (STT) export into per-account-manager client
-reports, written directly into your existing Google Spreadsheet. It runs as a static
-site on GitHub Pages, backed by a Google Apps Script Web App.
+LedgerX turns a Monthly Performance (STT) export into a ready-to-send client
+report. It reads the LedgerX Template (Google Sheets), validates and calculates
+everything server-side, and creates a new "{Month} {Year} Performance Summary"
+spreadsheet in a designated Google Drive folder. It runs as a static site on
+GitHub Pages, backed by a Google Apps Script Web App.
 
-The interface is a guided, one-step-at-a-time flow - like talking to an operator
-that performs one task at a time - rather than a dashboard. Pure black theme,
-silver accents, minimal typography, subtle fade/typing animations.
+The interface is a premium, minimal, one-screen-at-a-time experience: boot beam,
+month cards, a live stage tracker, and a stats-rich success screen. No uploads,
+no confirmations, no year picker.
 
 ## The flow
 
 ```
-Upload File  ->  Refresh Workbook  ->  Select Reporting Month  ->  Generate Report
-                                                                        |
-        Prepare Next Month  <-  View Results (Successful / Errors)  <---+
+Update the LedgerX Template (paste Client Database + Raw Data)
+        |
+Open LedgerX -> pick a month card -> automatic processing
+        |
+"{Month} {Year} Performance Summary" created in the output Drive folder
+   (Sheet 1: Performance Summary, Sheet 2: Errors)
+        |
+Success screen: stats, error preview, Open Report / Open Output Folder,
+Copy Notes (for GHL), Generate Another Report
 ```
 
-Only the current step is visible; each completed step transitions into the next
-automatically. An activity log at the bottom of the page tracks the last upload,
-refresh, generation, and archive.
+The year is always the current system year. The backend reads the template
+server-side during generation - the browser never parses or uploads files.
 
 ## How it works
 
 ```
 GitHub Pages (static)              Google Apps Script (Web App)         Google Drive
 ------------------------           ---------------------------          ------------------
-index.html / styles.css / -- fetch(JSON, text/plain) -->  Code.gs (doGet/doPost)  ---> The workbook:
+index.html / styles.css / -- fetch(JSON, text/plain) -->  Code.gs (doGet/doPost)  ---> MAIN TEMPLATE (never generated into):
 script.js                                                  Reports.gs, Sheets.gs,        Client Database
-                                                            Archive.gs, Utils.gs          Generated Report - {AM}
-                        <-- JSON response ------------------                              Errors
-                                                                                           Generated Summary
-                                                                                          Archive copies:
-                                                                                           Monthly Performance - {Month} {Year}
+                                                            Archive.gs, Utils.gs          Raw Data
+                        <-- JSON response ------------------
+                                                                                          OUTPUT FOLDER (one file per month):
+                                                                                           {Month} {Year} Performance Summary
+                                                                                             - Performance Summary
+                                                                                             - Errors
 ```
 
-- **Workbook.** All live sheets - Client Database, Generated Report - *, Errors,
-  Generated Summary - are tabs in the one existing spreadsheet. Archives are full
-  workbook copies saved into the same Drive folder, one per month, never modified
-  after creation.
-- **Authentication.** The frontend is public (GitHub Pages), so requests are
-  authenticated with a shared secret key. The key lives in Apps Script Script
-  Properties (`API_SECRET_KEY`) and is entered once into the browser (stored in
-  `localStorage`).
-- **Backend is the source of truth.** The browser only parses the uploaded table
-  into rows; the Apps Script backend re-reads the Client Database fresh and performs
+- **Main template.** Exactly two permanent tabs: `Client Database` (who owns each
+  STT ID: ID, Name, System, AM, Note) and `Raw Data` (the pasted Monthly
+  Performance export; the legacy `STT Import` tab name is still accepted).
+  Nothing is ever generated into the main template.
+- **Output.** Every generation writes `{Month} {Year} Performance Summary` into
+  the designated Drive folder (`OUTPUT_FOLDER_ID` in `Sheets.gs`). Re-running the
+  same month rewrites the same file instead of creating copies. Errors live only
+  in this output file.
+- **Authentication.** Requests are authenticated with a shared secret key stored
+  in Apps Script Script Properties (`API_SECRET_KEY`), entered once into the
+  browser (localStorage).
+- **Backend is the source of truth.** The browser sends only the reporting
+  month; Apps Script reads Raw Data and the Client Database fresh and performs
   every match, calculation, and write.
+
+## Frontend
+
+- Boot loading: single full-width light beam (sweep, bloom, pulse).
+- First visit: onboarding modal (localStorage flag) with View Guide / Get Started.
+- Header: LedgerX brand, Guide (in-app glass modal with the full how-to),
+  Refresh Data (flushes workbook recalculations).
+- Home: 12 glass month cards (click = generate immediately), Important Note
+  card, Recent Reports (localStorage, last 6, click to reopen).
+- Processing: live stage tracker - each stage animates to "✓ Completed"; the
+  last stage holds on the real backend call.
+- Success: filename + "Saved to Google Drive", stat cards (Clients Processed,
+  Successful, Errors, Success Rate, Average/Highest/Lowest Growth, Processing
+  Time), error preview (first 5 + View Full Errors modal), Open Report /
+  Copy Notes / Open Output Folder / Generate Another Report.
+- Empty state: backend "no data" errors show "No Data Available" + Open Guide.
+- Fonts: Satoshi (Fontshare) + Inter. All animations are 200-300ms
+  transform/opacity. Fully responsive; keyboard and screen-reader friendly.
 
 ## Project structure
 
 ```
 TradingReportGenerator/
-  index.html            Guided step-by-step UI
-  styles.css             Pure black / silver minimal theme
-  script.js               Step flow, file parsing, typing-effect status, API client
-  config.js               Public config: Apps Script URL, spreadsheet URL, column aliases
+  index.html            v2.0 UI: scenes, modals (onboarding/guide/errors)
+  styles.css             Black glass theme, beam, stage tracker, stat cards
+  script.js               Scene flow, modals, stage player, recent reports, API client
+  config.js               Public config: Apps Script URL, output folder URL, storage keys
   assets/                  Favicon
   apps-script/
     Code.gs                Web app entry points (doGet/doPost), routing, auth
-    Reports.gs              Validation, calculations, grouping, report + error writing
-    Sheets.gs                All Sheets read/write access, refresh, column protection
-    Archive.gs               "Prepare Next Month": Drive workbook copy + data clear
-    Utils.gs                 Formatting/parsing helpers shared by the above
+    Reports.gs              Validation, calculations, growth stats, output routing
+    Sheets.gs                Raw Data reader, output file writer, workbook access
+    Archive.gs               prepareNextMonth endpoint (Drive copy + Raw Data clear)
+    Utils.gs                 Parsing helpers, STT ID extraction, column aliases
     appsscript.json           Apps Script manifest (web app config, OAuth scopes)
   README.md
   SETUP.md                 Full one-time setup guide
 ```
 
-## Quick start
-
-1. Follow **[SETUP.md](SETUP.md)** to prepare the spreadsheet, deploy the Apps
-   Script Web App, and set the shared secret key.
-2. Put the exec URL from your deployment into `config.js` (`APPS_SCRIPT_URL`).
-3. Push this folder to a GitHub repo and enable GitHub Pages on it.
-4. Open the site and enter the access key when prompted.
-
 ## Data rules (for reference)
 
-- **Net Deposit** = Total Deposit − Total Withdrawal
-- **Growth %** = ((Balance − Net Deposit) / Net Deposit) × 100, rounded to 2 decimals
-- **Floating P/L** = Equity − Balance
-- The source's own "Growth" column is always ignored - growth is recalculated from
-  Balance and Net Deposit every time.
+- The STT ID is extracted from the Account label's parentheses:
+  `_RS15 500K Max Tradiso (1335619)` -> `1335619`; bare IDs pass through unchanged.
+- **Net Deposit** = Deposits − |Withdrawals| (the STT export reports withdrawals
+  as negative amounts; positive-total exports work identically).
+- **Growth %** = ((Balance − Net Deposit) / Net Deposit) × 100, rounded to 2 decimals.
+- **Floating P/L** = Equity − Balance.
+- The source's own "Growth %" column is always ignored - growth is recalculated.
 - Negative numbers always render as `-$1,250.55`, never `($1,250.55)`.
-- **Notes** are always one single sentence, ready to paste into GHL:
+- **Notes** are one single sentence, ready to paste into GHL:
   `July: 6.42% growth, $1,842.55 closed profit, $325.20 floating P/L, $18,560.55 current balance.`
-- An account is routed to **Generated Report - Unknown** and logged in the
-  **Errors** sheet whenever its STT ID is blank/unmatched/duplicated, or its
-  Balance, Deposit, or Equity is blank, non-numeric, or (for Balance) zero.
-- The **Errors** sheet stores every error from the latest generation:
-  Client Name, Account Number, Software, Error Type, Detailed Error Message, Timestamp.
-- The Google Sheet's own pivot tables are the official summary - LedgerX refreshes
-  them (by flushing the new report data they reference) but never generates a
-  separate summary.
-- Disclaimer shown in the app: *Performance shown is Month-to-Date and should not
-  be interpreted as Month-on-Month performance.*
-
-## Prepare Next Month
-
-Archiving saves a complete copy of the workbook - formulas, pivot tables, charts,
-formatting - as `Monthly Performance - {Month} {Year}` in the same Drive folder,
-then clears only the report data rows. Headers, formulas, pivot tables, conditional
-formatting, protected ranges, data validation, and sheet structure are preserved, so
-the workbook is immediately ready for the next month.
+- **Performance Summary** (in the output file) lists STT ID, Name, System, AM,
+  Note - grouped by AM alphabetically, Unknown group last, clients A-Z.
+- An account lands in the **Unknown** group and in the output file's **Errors**
+  sheet whenever its STT ID is blank/unmatched/duplicated, or its Balance,
+  Deposit, or Equity is blank, non-numeric, or (for Balance) zero.
+- The generation response also returns aggregate stats (average / highest /
+  lowest growth) for the success screen.
+- Important note shown in the app: performance is calculated from each client's
+  Start Date up to the selected month's end date - it is NOT a month-over-month
+  (MoM) growth calculation.
 
 ## License
 
-Internal tool - no license file included by default.
+Internal tool - © Ridge Capital Solutions.

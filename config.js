@@ -8,15 +8,21 @@
 window.LEDGERX_CONFIG = {
   // Paste the /exec URL from your Apps Script deployment here.
   // See SETUP.md, step "Deploy the Web App".
-APPS_SCRIPT_URL: 'https://script.google.com/macros/s/AKfycbyc4GMN0txG6FLMIFW31brApIfBpR97GhzbcuzYTv_GTJC-MlgjbKcKDxt4RQErrctYuw/exec',
-  // The workbook opened by the "Open Updated Spreadsheet" button.
+APPS_SCRIPT_URL: 'https://script.google.com/macros/s/AKfycbxVlv9MTKAn63NMHKk1YUXJJ_HXyKtL6Q8OR9ixUY9hgOjo1Tr2fw_bUWTv7BZPspatvA/exec',
+  // The main workbook (Client Database / Raw Data / Errors).
   SPREADSHEET_URL: 'https://docs.google.com/spreadsheets/d/1C2NX5ImumLfOxyopBHr_xOvwSOQod7bf8yzRTJHX_Yo/edit',
+  // Drive folder that receives every generated Performance Summary file.
+  // Used as the fallback for the "Open Output Folder" button; the backend
+  // returns the same folder's URL with each generation.
+  OUTPUT_FOLDER_URL: 'https://drive.google.com/drive/folders/1tkZxSgzWrjv2Ot-zV7J6pAZ4pIEJ3oRi',
 
   // localStorage keys. ACCESS_KEY is kept identical across versions so
   // an already-configured browser stays connected after UI updates.
   STORAGE_KEYS: {
     ACCESS_KEY: 'ledgerx_access_key',
-    ACTIVITY: 'ledgerx_activity'
+    ACTIVITY: 'ledgerx_activity',
+    ONBOARDED: 'ledgerx_onboarded',
+    RECENT_REPORTS: 'ledgerx_recent_reports'
   },
 
   // Header aliases used to auto-detect columns in the uploaded or pasted
