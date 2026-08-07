@@ -72,9 +72,34 @@
       }).then(Api._handle);
     },
     _handle: function (response) {
-      return response.json().then(function (data) {
-        if (!data.success) throw new Error(data.error || 'Request failed.');
-        return data;
+      // Try to read the response body (JSON preferred). If the body isn't
+      // valid JSON, include the raw text and HTTP status in the error so the
+      // UI can display a helpful message instead of a generic "Failed to fetch".
+      return response.text().then(function (text) {
+        var data = null;
+        if (text) {
+          try { data = JSON.parse(text); } catch (e) { /* fall through */ }
+        }
+
+        if (data && typeof data === 'object') {
+          if (data.success === false) {
+            throw new Error(data.error || ('Request failed: ' + (response.status || 'unknown')));
+          }
+          return data;
+        }
+
+        // If we reach here, the response wasn't JSON or didn't include a
+        // success flag. If the HTTP status is not OK, throw an error including
+        // status + body to help debugging. Otherwise, return an object with
+        // the raw text.
+        if (!response.ok) {
+          var body = text ? (': ' + text) : '';
+          throw new Error('HTTP ' + response.status + ' ' + response.statusText + body);
+        }
+
+        // Successful response with no JSON body — return an empty success
+        // object to keep callers compatible.
+        return { success: true, raw: text };
       });
     }
   };
@@ -374,7 +399,14 @@
     function submit() {
       var key = input.value.trim();
       var status = $('keyStatus');
-      if (!key) { status.textContent = 'Enter the access key to continue.'; return; }
+      if (!key) {
+        status.textContent = '';
+        var resume = resumeAfterKey;
+        resumeAfterKey = null;
+        if (resume) { retryFn = null; resume(); }
+        else showHome();
+        return;
+      }
       var previous = Store.getKey();
       Store.setKey(key);
       status.textContent = 'Verifying…';
@@ -596,8 +628,7 @@
       $('loader').classList.add('done');
       return delay(REDUCED_MOTION ? 0 : 350);
     }).then(function () {
-      if (Store.getKey()) showHome();
-      else Scenes.show('step-key');
+      showHome();
     });
   });
 })();

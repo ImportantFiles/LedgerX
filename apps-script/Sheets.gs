@@ -29,14 +29,37 @@ function getSpreadsheet_() {
   return SpreadsheetApp.openById(SPREADSHEET_ID);
 }
 
+function normalizeSheetName_(name) {
+  return String(name || '').trim().toLowerCase();
+}
+
 /** Gets an existing sheet by name, throwing a clear error if it is missing. */
 function requireSheet_(spreadsheet, name) {
   var sheet = spreadsheet.getSheetByName(name);
-  if (!sheet) {
-    throw new Error('Required sheet "' + name + '" was not found in the workbook. ' +
-      'See SETUP.md to create it.');
-  }
-  return sheet;
+  if (sheet) return sheet;
+
+  var target = normalizeSheetName_(name);
+  var fallback = null;
+  spreadsheet.getSheets().forEach(function (candidate) {
+    var candidateName = normalizeSheetName_(candidate.getName());
+    if (candidateName === target) {
+      fallback = candidate;
+    }
+  });
+  if (fallback) return fallback;
+
+  var fuzzy = null;
+  spreadsheet.getSheets().forEach(function (candidate) {
+    var candidateName = normalizeSheetName_(candidate.getName());
+    if (candidateName.indexOf(target) !== -1 || target.indexOf(candidateName) !== -1) {
+      fuzzy = candidate;
+    }
+  });
+  if (fuzzy) return fuzzy;
+
+  var available = spreadsheet.getSheets().map(function (s) { return s.getName(); });
+  throw new Error('Required sheet "' + name + '" was not found in the workbook. ' +
+    'Available sheets: ' + available.join(', ') + '. Ensure the sheet name is exactly "' + name + '" and that the correct spreadsheet is configured.');
 }
 
 /**

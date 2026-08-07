@@ -19,11 +19,11 @@
 function doGet(e) {
   var params = (e && e.parameter) || {};
   return safeHandle_(function () {
-    assertAuthorized_(params.key);
     switch (params.action) {
       case 'ping':
         return { message: 'pong' };
       case 'getClients':
+        assertAuthorized_(params.key);
         return getClientDatabase_();
       default:
         throw new Error('Unknown action: ' + params.action);
