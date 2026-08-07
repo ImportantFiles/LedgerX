@@ -48,7 +48,13 @@ function requireSheet_(spreadsheet, name) {
  * `rows`/`bySttId` only include rows with a usable STT ID, for lookups.
  */
 function readClientDatabase_(spreadsheet) {
-  var sheet = requireSheet_(spreadsheet, CLIENT_SHEET_NAME);
+  var sheet;
+  try {
+    sheet = requireSheet_(spreadsheet, CLIENT_SHEET_NAME);
+  } catch (err) {
+    var available = spreadsheet.getSheets().map(function(s){return s.getName();});
+    throw new Error('Failed to open Client Database sheet "' + CLIENT_SHEET_NAME + '" in spreadsheet (id=' + spreadsheet.getId() + '). Available sheets: ' + available.join(', ') + '. Original error: ' + (err && err.message ? err.message : String(err)));
+  }
   var lastRow = sheet.getLastRow();
   var bySttId = {};
   var rows = [];
@@ -56,7 +62,14 @@ function readClientDatabase_(spreadsheet) {
 
   if (lastRow < 2) return { bySttId: bySttId, rows: rows, allRows: allRows, sheet: sheet, lastRow: lastRow };
 
-  var values = sheet.getRange(2, 1, lastRow - 1, 5).getValues();
+  var values;
+  try {
+    values = sheet.getRange(2, 1, lastRow - 1, 5).getValues();
+  } catch (err) {
+    throw new Error('Failed reading Client Database range A2:E' + lastRow + ' from spreadsheet (id=' + spreadsheet.getId() + '). Ensure the sheet has at least five columns and proper permissions. Original error: ' + (err && err.message ? err.message : String(err)));
+  }
+  // Log a small preview to help debugging when the backend is invoked remotely.
+  try { Logger.log('readClientDatabase_ preview id=%s url=%s lastRow=%s sample=%s', spreadsheet.getId(), spreadsheet.getUrl(), lastRow, JSON.stringify(values.slice(0,5))); } catch (e) { /* noop */ }
   for (var i = 0; i < values.length; i++) {
     var row = values[i];
     // Column A normally holds a bare STT ID, but extractSttId_ also
