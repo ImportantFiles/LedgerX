@@ -64,7 +64,9 @@
       return fetch(url.toString(), { method: 'GET' }).then(Api._handle);
     },
     post: function (action, body) {
-      var payload = Object.assign({ action: action, key: Store.getKey() }, body);
+      var payload = Object.assign({
+    action: action
+}, body);
       return fetch(CFG.APPS_SCRIPT_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
